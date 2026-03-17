@@ -94,3 +94,28 @@ Starter templates are committed:
 - `npm run dev:all` — start frontend + bridge in background
 - `npm run stop:all` — stop frontend + bridge
 - `npm run doctor` — check frontend/bridge/openclaw availability
+
+## Discord webhook not sending? Quick checks
+
+1. Confirm bridge process has env loaded:
+
+```bash
+npm run stop:all
+npm run run:website
+```
+
+2. If you run bridge manually via `automation/run-board-bridge.sh`, it now auto-loads `.env`.
+
+3. Verify webhook is configured:
+
+```bash
+grep '^DISCORD_WEBHOOK_URL=' .env
+```
+
+4. Notifications are event-driven (dispatch/QA start/pass/fail). If no qualifying event occurred, no message is sent.
+
+5. Check bridge log for webhook failures:
+
+```bash
+tail -f automation/logs/bridge.log
+```

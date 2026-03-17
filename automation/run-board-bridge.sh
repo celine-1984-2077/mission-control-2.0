@@ -10,6 +10,14 @@ mkdir -p "$ROOT_DIR/automation"
 echo $$ > "$PID_PATH"
 cd "$ROOT_DIR" || exit 1
 
+# Load .env when present so DISCORD_WEBHOOK_URL and other vars are available
+if [ -f "$ROOT_DIR/.env" ]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "$ROOT_DIR/.env"
+  set +a
+fi
+
 while true; do
   start_ts="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
   echo "[$start_ts] starting board bridge" >> "$RESTART_LOG_PATH"
