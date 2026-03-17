@@ -12,6 +12,18 @@ dist
 dist-ssr
 *.local
 
+# Runtime data (keep templates, ignore machine state)
+automation/logs/
+automation/pids/
+automation/*.log
+automation/*.pid
+automation/dispatch-queue.jsonl
+automation/board-state.json
+automation/tasks.json
+automation/qa-results/
+automation/run-logs/
+automation/discord-webhook.txt
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

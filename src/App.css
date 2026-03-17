@@ -200,11 +200,26 @@ button.primary {
 }
 
 .task-card {
+  position: relative;
   border-radius: 18px;
   padding: 14px;
   border: 1px solid rgba(95, 125, 245, 0.7);
   background: linear-gradient(180deg, #0e1a39 0%, #0b1530 100%);
   cursor: grab;
+}
+
+.delete-x {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  padding: 0;
+  line-height: 1;
+  font-size: 18px;
+  background: rgba(255, 105, 135, 0.2);
+  border: 1px solid rgba(255, 105, 135, 0.5);
 }
 
 .task-card:active { cursor: grabbing; }
@@ -328,4 +343,99 @@ button.primary {
   .mc-sidebar { display: none; }
   .board-wrap { grid-template-columns: 1fr; }
   .lanes-grid { grid-template-columns: 1fr; }
+}
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(4, 9, 20, 0.72);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  z-index: 100;
+}
+
+.modal-card {
+  width: min(680px, 100%);
+  border-radius: 18px;
+  border: 1px solid rgba(92, 116, 186, 0.35);
+  background: #0a1530;
+  padding: 16px;
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.modal-header h3 {
+  margin: 0;
+  font-size: 26px;
+}
+
+.modal-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.modal-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.modal-form span {
+  color: #9eb0df;
+  font-size: 14px;
+}
+
+.modal-form input,
+.modal-form textarea {
+  border: 1px solid rgba(133, 150, 197, 0.35);
+  background: #0b1a3a;
+  color: #edf2ff;
+  border-radius: 12px;
+  padding: 10px 12px;
+  font: inherit;
+}
+
+.create-error {
+  margin: 0;
+  color: #ff9db0;
+  font-size: 14px;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.detail-readonly {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.session-log {
+  max-height: 260px;
+  overflow: auto;
+  border: 1px solid rgba(133, 150, 197, 0.35);
+  border-radius: 12px;
+  padding: 10px;
+  background: #0b1a3a;
+}
+
+.session-log p {
+  margin: 0 0 8px;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+h4 {
+  margin: 8px 0 4px;
 }

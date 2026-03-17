@@ -1,0 +1,3 @@
+# Optional: paste Discord webhook URL here for bridge notifications
+# Example:
+# https://discord.com/api/webhooks/xxx/yyy
