@@ -31,6 +31,8 @@ npm run run:website
 
 This runs bootstrap + starts frontend + starts bridge.
 
+During bootstrap, if `DISCORD_WEBHOOK_URL` is not configured and the command is interactive, it will prompt for a webhook URL and write it into `.env` automatically.
+
 Open:
 - UI: <http://127.0.0.1:5173>
 - Bridge state endpoint: <http://127.0.0.1:8787/state>

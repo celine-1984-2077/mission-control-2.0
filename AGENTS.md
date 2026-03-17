@@ -8,8 +8,9 @@ npm run run:website
 
 This command should:
 1. bootstrap local files/env/templates
-2. start frontend (default 5173)
-3. start board bridge (default 8787)
+2. if Discord webhook is missing and shell is interactive, prompt for webhook URL and save into `.env`
+3. start frontend (default 5173)
+4. start board bridge (default 8787)
 
 Health check command:
 
