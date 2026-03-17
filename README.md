@@ -21,6 +21,16 @@ cp .env.example .env
 npm run dev:all
 ```
 
+## One-command run (recommended for OpenClaw use)
+
+After clone/pull, ask OpenClaw to run this in the repo:
+
+```bash
+npm run run:website
+```
+
+This runs bootstrap + starts frontend + starts bridge.
+
 Open:
 - UI: <http://127.0.0.1:5173>
 - Bridge state endpoint: <http://127.0.0.1:8787/state>
