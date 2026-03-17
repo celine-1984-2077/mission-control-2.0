@@ -119,7 +119,7 @@ function startExecutionSession(task) {
   ].join('\n\n')
 
   const child = spawn('openclaw', ['agent', '--session-id', sessionId, '--message', message], {
-    cwd: WORKSPACE_ROOT,
+    cwd: MISSION_CONTROL_ROOT,
     stdio: 'ignore',
   })
 
@@ -171,7 +171,7 @@ function startQaSession(task) {
   ].join('\n\n')
 
   const child = spawn('openclaw', ['agent', '--session-id', sessionId, '--message', message], {
-    cwd: WORKSPACE_ROOT,
+    cwd: MISSION_CONTROL_ROOT,
     stdio: 'ignore',
   })
 
