@@ -44,6 +44,26 @@ const SESSION_LOG_URL = `${BRIDGE_BASE_URL}/session-log`
 
 const initialActivity: Activity[] = []
 
+function formatActivityTime(item: Activity) {
+  const raw = item.createdAt ?? item.time
+  const parsed = raw ? new Date(raw) : null
+  if (!parsed || Number.isNaN(parsed.getTime())) {
+    return { primary: item.time || 'Unknown time', secondary: '' }
+  }
+
+  const primary = new Intl.DateTimeFormat('en-US', {
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(parsed)
+  const secondary = new Intl.DateTimeFormat('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  }).format(parsed)
+
+  return { primary, secondary }
+}
+
 function App() {
   const [activeNav, setActiveNav] = useState('Tasks')
   const [tasks, setTasks] = useState<Task[]>([])
@@ -98,6 +118,16 @@ function App() {
     } catch {}
   }
 
+
+  async function saveBoard(nextTasks: Task[], nextActivity: Activity[]) {
+    if (!hydrated) return
+    if (suppressSaveRef.current) return
+    fetch(BOARD_BRIDGE_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tasks: nextTasks, activity: nextActivity }),
+    }).catch(() => undefined)
+  }
   useEffect(() => {
     loadBoardFromServer()
     const poll = window.setInterval(loadBoardFromServer, 2000)
@@ -111,37 +141,35 @@ function App() {
     return () => window.clearInterval(timer)
   }, [])
 
-  useEffect(() => {
-    if (!hydrated) return
-    if (suppressSaveRef.current) return
-    fetch(BOARD_BRIDGE_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tasks, activity }),
-    }).catch(() => undefined)
-  }, [tasks, activity, hydrated])
 
   function moveTask(taskId: string, lane: ColumnKey, beforeTaskId?: string) {
-    setTasks((current) => {
-      const moving = current.find((t) => t.id === taskId)
-      if (!moving) return current
-      const moved: Task = { ...moving, lane }
-      const withoutMoving = current.filter((t) => t.id !== taskId)
+    const moving = tasks.find((t) => t.id === taskId)
+    if (!moving) return
 
-      if (!beforeTaskId) {
-        const targetIndexes = withoutMoving.map((t, idx) => ({ id: t.id, idx })).filter((x) => withoutMoving[x.idx].lane === lane)
-        if (!targetIndexes.length) return [moved, ...withoutMoving]
+    const moved: Task = { ...moving, lane }
+    const withoutMoving = tasks.filter((t) => t.id !== taskId)
+    let nextTasks: Task[]
+
+    if (!beforeTaskId) {
+      const targetIndexes = withoutMoving.map((t, idx) => ({ id: t.id, idx })).filter((x) => withoutMoving[x.idx].lane === lane)
+      if (!targetIndexes.length) nextTasks = [moved, ...withoutMoving]
+      else {
         const clone = [...withoutMoving]
         clone.splice(targetIndexes[targetIndexes.length - 1].idx + 1, 0, moved)
-        return clone
+        nextTasks = clone
       }
-
+    } else {
       const beforeIndex = withoutMoving.findIndex((t) => t.id === beforeTaskId)
-      if (beforeIndex === -1) return [moved, ...withoutMoving]
-      const clone = [...withoutMoving]
-      clone.splice(beforeIndex, 0, moved)
-      return clone
-    })
+      if (beforeIndex === -1) nextTasks = [moved, ...withoutMoving]
+      else {
+        const clone = [...withoutMoving]
+        clone.splice(beforeIndex, 0, moved)
+        nextTasks = clone
+      }
+    }
+
+    setTasks(nextTasks)
+    saveBoard(nextTasks, activity)
 
     setDraggingTaskId(null)
     setDragOverLane(null)
@@ -149,8 +177,11 @@ function App() {
   }
 
   function deleteTask(taskId: string) {
-    setTasks((current) => current.filter((t) => t.id !== taskId))
-    setActivity((current) => [{ id: `a-${Date.now()}`, title: `${taskId} deleted`, detail: 'Task removed from board.', time: 'just now' }, ...current])
+    const nextTasks = tasks.filter((t) => t.id !== taskId)
+    const nextActivity = [{ id: `a-${Date.now()}`, title: `${taskId} deleted`, detail: 'Task removed from board.', time: 'just now' }, ...activity]
+    setTasks(nextTasks)
+    setActivity(nextActivity)
+    saveBoard(nextTasks, nextActivity)
     if (selectedTask?.id === taskId) setSelectedTask(null)
   }
 
@@ -181,8 +212,11 @@ function App() {
       lane: 'backlog',
       createdAt: new Date().toISOString(),
     }
-    setTasks((current) => [task, ...current])
-    setActivity((current) => [{ id: `a-${Date.now()}`, title: `Task created: ${task.title}`, detail: `Status backlog`, time: 'just now' }, ...current])
+    const nextTasks = [task, ...tasks]
+    const nextActivity = [{ id: `a-${Date.now()}`, title: `Task created: ${task.title}`, detail: `Status backlog`, time: 'just now' }, ...activity]
+    setTasks(nextTasks)
+    setActivity(nextActivity)
+    saveBoard(nextTasks, nextActivity)
     setNewTaskTitle('')
     setNewTaskObjective('')
     setNewTaskTargetUrl('')
@@ -214,20 +248,22 @@ function App() {
 
   function saveBacklogDetail() {
     if (!selectedTask || selectedTask.lane !== 'backlog') return
-    setTasks((current) => current.map((t) => t.id === selectedTask.id ? {
+    const nextTasks = tasks.map((t) => t.id === selectedTask.id ? {
       ...t,
       title: detailDraft.title.trim(),
       objective: detailDraft.objective.trim(),
       targetUrl: detailDraft.targetUrl.trim() || undefined,
       acceptanceCriteria: detailDraft.acceptance.split('\n').map((line) => line.trim()).filter(Boolean),
-    } : t))
+    } : t)
+    setTasks(nextTasks)
+    saveBoard(nextTasks, activity)
     setSelectedTask(null)
   }
 
   return (
     <div className="mc-shell">
       <aside className="mc-sidebar panel">
-        <div className="brand-block"><p>Mission Control</p><h1>CÉLINE x TONY</h1></div>
+        <div className="brand-block"><p>Mission Control</p><h1>CÉLINE</h1></div>
         <nav className="nav-list">
           {navItems.map((item) => <button key={item} className={`nav-item ${activeNav === item ? 'active' : ''}`} onClick={() => setActiveNav(item)}>{item}</button>)}
         </nav>
@@ -278,9 +314,24 @@ function App() {
             <h3>ACTIVITY</h3>
             <div className="running-box"><span>NOW RUNNING</span><p>{grouped.in_progress[0]?.title ?? 'Idle'}</p></div>
             <div className="activity-list">
-              {activity.map((item) => (
-                <article className="activity-item" key={item.id}><span className="dot" /><div><strong>{item.title}</strong><p>{item.detail}</p><small>{item.time}</small></div></article>
-              ))}
+              {activity.map((item) => {
+                const time = formatActivityTime(item)
+                return (
+                  <article className="activity-item" key={item.id}>
+                    <span className="dot" />
+                    <div className="activity-content">
+                      <div className="activity-meta">
+                        <strong>{item.title}</strong>
+                        <time>
+                          <span>{time.primary}</span>
+                          {time.secondary && <small>{time.secondary}</small>}
+                        </time>
+                      </div>
+                      <p>{item.detail}</p>
+                    </div>
+                  </article>
+                )
+              })}
             </div>
           </aside>
         </section>
