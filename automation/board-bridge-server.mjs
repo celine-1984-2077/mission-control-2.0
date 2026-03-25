@@ -4,7 +4,8 @@ import path from 'node:path'
 import { spawn } from 'node:child_process'
 
 const PORT = Number(process.env.BOARD_BRIDGE_PORT || 8787)
-const DISPATCH_INTERVAL_MS = 10_000
+const DISPATCH_INTERVAL_MS = Number(process.env.BOARD_DISPATCH_INTERVAL_MS || 10_000)
+const QA_STALE_MS = Number(process.env.BOARD_QA_STALE_MS || 20 * 60 * 1000)
 const MISSION_CONTROL_ROOT = process.cwd()
 const WORKSPACE_ROOT = path.resolve(MISSION_CONTROL_ROOT, '..')
 
@@ -12,6 +13,10 @@ const STATE_PATH = path.resolve(MISSION_CONTROL_ROOT, 'automation/board-state.js
 const WEBHOOK_PATH = path.resolve(MISSION_CONTROL_ROOT, 'automation/discord-webhook.txt')
 const DISPATCH_QUEUE_PATH = path.resolve(MISSION_CONTROL_ROOT, 'automation/dispatch-queue.jsonl')
 const QA_RESULTS_DIR = path.resolve(MISSION_CONTROL_ROOT, 'automation/qa-results')
+const RUN_LOGS_DIR = path.resolve(MISSION_CONTROL_ROOT, 'automation/run-logs')
+const TASK_ATTACHMENTS_DIR = path.resolve(MISSION_CONTROL_ROOT, 'automation/task-attachments')
+const DOC_STORE_ROOT = path.resolve(WORKSPACE_ROOT, '.mc-docs')
+const DOC_STORE_INDEX_PATH = path.join(DOC_STORE_ROOT, 'index.json')
 
 const OPENCLAW_HOME = process.env.OPENCLAW_HOME || path.resolve(process.env.HOME ?? '', '.openclaw')
 const SESSION_STORE_DIR = process.env.BOARD_SESSION_STORE_DIR || path.resolve(OPENCLAW_HOME, 'agents/main/sessions')
@@ -35,6 +40,57 @@ function ensureStateFile() {
 
 function ensureQaResultsDir() {
   fs.mkdirSync(QA_RESULTS_DIR, { recursive: true })
+}
+
+function ensureTaskAttachmentsDir() {
+  fs.mkdirSync(TASK_ATTACHMENTS_DIR, { recursive: true })
+}
+
+function ensureDocStore() {
+  fs.mkdirSync(DOC_STORE_ROOT, { recursive: true })
+  if (!fs.existsSync(DOC_STORE_INDEX_PATH)) {
+    fs.writeFileSync(DOC_STORE_INDEX_PATH, JSON.stringify({ projects: [], docs: [] }, null, 2))
+  }
+}
+
+function readDocStoreIndex() {
+  ensureDocStore()
+  try {
+    const parsed = JSON.parse(fs.readFileSync(DOC_STORE_INDEX_PATH, 'utf8'))
+    return {
+      projects: Array.isArray(parsed.projects) ? parsed.projects : [],
+      docs: Array.isArray(parsed.docs) ? parsed.docs : [],
+    }
+  } catch {
+    return { projects: [], docs: [] }
+  }
+}
+
+function writeDocStoreIndex(next) {
+  ensureDocStore()
+  const payload = {
+    projects: Array.isArray(next?.projects) ? next.projects : [],
+    docs: Array.isArray(next?.docs) ? next.docs : [],
+  }
+  fs.writeFileSync(DOC_STORE_INDEX_PATH, JSON.stringify(payload, null, 2))
+  return payload
+}
+
+function slugify(value, fallback = 'item') {
+  const slug = String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9\u4e00-\u9fa5]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+  return slug || fallback
+}
+
+function sanitizeDocTags(tags) {
+  if (!Array.isArray(tags)) return []
+  return Array.from(new Set(tags
+    .map((tag) => String(tag || '').trim())
+    .filter(Boolean)
+    .slice(0, 12)))
 }
 
 function readState() {
@@ -72,6 +128,42 @@ function buildAcceptanceList(task) {
   return items.map((line, idx) => `${idx + 1}. ${line}`).join('\n')
 }
 
+function decodeDataUrl(dataUrl) {
+  if (typeof dataUrl !== 'string') return null
+  const match = dataUrl.match(/^data:([^;,]+)?;base64,(.+)$/)
+  if (!match) return null
+  const mimeType = match[1] || 'application/octet-stream'
+  const base64Body = match[2]
+  return { mimeType, buffer: Buffer.from(base64Body, 'base64') }
+}
+
+function writeTaskAttachments(task) {
+  const attachments = Array.isArray(task?.imageAttachments) ? task.imageAttachments : []
+  if (!attachments.length) return []
+
+  ensureTaskAttachmentsDir()
+  const taskDir = path.join(TASK_ATTACHMENTS_DIR, String(task.id || 'unknown').replace(/[^a-zA-Z0-9._-]/g, '_'))
+  fs.mkdirSync(taskDir, { recursive: true })
+
+  const written = []
+  for (const [index, attachment] of attachments.entries()) {
+    const decoded = decodeDataUrl(attachment?.dataUrl)
+    if (!decoded) continue
+
+    const rawName = typeof attachment?.name === 'string' && attachment.name.trim() ? attachment.name.trim() : `image-${index + 1}.png`
+    const safeName = rawName.replace(/[^a-zA-Z0-9._-]/g, '_')
+    const ext = path.extname(safeName)
+    const fallbackExt = decoded.mimeType.split('/')[1] ? `.${decoded.mimeType.split('/')[1]}` : '.bin'
+    const finalName = ext ? safeName : `${safeName}${fallbackExt}`
+    const outputPath = path.join(taskDir, finalName)
+
+    fs.writeFileSync(outputPath, decoded.buffer)
+    written.push(outputPath)
+  }
+
+  return written
+}
+
 function isLikelyWebsiteTask(task) {
   const text = [task?.title, task?.objective, ...(Array.isArray(task?.tags) ? task.tags : [])]
     .join(' ')
@@ -91,18 +183,205 @@ function getWebhookUrl() {
   return ''
 }
 
-async function postWebhook(content) {
+function collectPlaywrightImagesForTask(task, maxImages = 4) {
+  const taskId = String(task?.id ?? '').trim()
+  if (!taskId) return []
+
+  const dispatchedAtMs = task?.dispatchedAt ? new Date(task.dispatchedAt).getTime() : Number.NaN
+  const minMtimeMs = Number.isFinite(dispatchedAtMs) ? dispatchedAtMs - 2 * 60 * 1000 : Date.now() - 60 * 60 * 1000
+  const directories = [
+    path.resolve(MISSION_CONTROL_ROOT, 'automation/run-logs'),
+    path.resolve(MISSION_CONTROL_ROOT, 'automation/qa-results'),
+  ]
+
+  const imageFilePattern = /\.(png|jpe?g|webp|gif)$/i
+  const playwrightLikePattern = /(playwright|qa|before|after|screenshot|home)/i
+  const candidates = []
+
+  for (const dir of directories) {
+    if (!fs.existsSync(dir)) continue
+    let entries = []
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true })
+    } catch {
+      continue
+    }
+
+    for (const entry of entries) {
+      if (!entry.isFile()) continue
+      if (!imageFilePattern.test(entry.name)) continue
+      if (!entry.name.includes(taskId)) continue
+      if (!playwrightLikePattern.test(entry.name)) continue
+
+      const fullPath = path.join(dir, entry.name)
+      let stat
+      try {
+        stat = fs.statSync(fullPath)
+      } catch {
+        continue
+      }
+
+      if (!Number.isFinite(stat.mtimeMs) || stat.mtimeMs < minMtimeMs) continue
+      candidates.push({ path: fullPath, mtimeMs: stat.mtimeMs })
+    }
+  }
+
+  candidates.sort((a, b) => b.mtimeMs - a.mtimeMs)
+  return candidates.slice(0, maxImages).map((x) => x.path)
+}
+
+function resolveEvidenceImagePath(rawPath) {
+  if (typeof rawPath !== 'string') return null
+  const trimmed = rawPath.trim()
+  if (!trimmed) return null
+
+  const extractedImageLikePaths = []
+  const imagePathPattern = /(?:\.?\.?\/)?[A-Za-z0-9_./-]+\.(?:png|jpe?g|webp|gif)/ig
+  for (const match of trimmed.matchAll(imagePathPattern)) {
+    if (match?.[0]) extractedImageLikePaths.push(match[0])
+  }
+
+  const candidatePaths = [
+    trimmed,
+    ...extractedImageLikePaths,
+  ]
+
+  const resolvedCandidates = []
+  for (const candidate of candidatePaths) {
+    const value = String(candidate || '').trim()
+    if (!value) continue
+
+    resolvedCandidates.push(value)
+    resolvedCandidates.push(path.resolve(MISSION_CONTROL_ROOT, value))
+    resolvedCandidates.push(path.resolve(QA_RESULTS_DIR, value))
+  }
+
+  for (const candidate of resolvedCandidates) {
+    const absolute = path.resolve(candidate)
+    if (!fs.existsSync(absolute)) continue
+
+    let stat
+    try {
+      stat = fs.statSync(absolute)
+    } catch {
+      continue
+    }
+
+    if (!stat.isFile()) continue
+    if (!/\.(png|jpe?g|webp|gif)$/i.test(absolute)) continue
+    return absolute
+  }
+
+  return null
+}
+
+function collectQaEvidenceImages(task, qaVerdict, maxImages = 4) {
+  const fromQa = Array.isArray(qaVerdict?.evidence)
+    ? qaVerdict.evidence
+        .map((evidencePath) => resolveEvidenceImagePath(evidencePath))
+        .filter(Boolean)
+    : []
+
+  const unique = []
+  const seen = new Set()
+  for (const fullPath of fromQa) {
+    if (seen.has(fullPath)) continue
+    seen.add(fullPath)
+    unique.push(fullPath)
+    if (unique.length >= maxImages) return unique
+  }
+
+  const fallback = collectPlaywrightImagesForTask(task, maxImages)
+  for (const fullPath of fallback) {
+    if (seen.has(fullPath)) continue
+    seen.add(fullPath)
+    unique.push(fullPath)
+    if (unique.length >= maxImages) break
+  }
+
+  return unique
+}
+
+function mimeTypeFromImagePath(imagePath) {
+  const ext = path.extname(String(imagePath || '')).toLowerCase()
+  if (ext === '.png') return 'image/png'
+  if (ext === '.jpg' || ext === '.jpeg') return 'image/jpeg'
+  if (ext === '.webp') return 'image/webp'
+  if (ext === '.gif') return 'image/gif'
+  return 'application/octet-stream'
+}
+
+function buildTaskImageAttachmentsFromPaths(imagePaths) {
+  const out = []
+  for (const imagePath of Array.isArray(imagePaths) ? imagePaths : []) {
+    try {
+      const absolute = path.resolve(String(imagePath || ''))
+      const stat = fs.statSync(absolute)
+      if (!stat.isFile()) continue
+
+      const buffer = fs.readFileSync(absolute)
+      const mimeType = mimeTypeFromImagePath(absolute)
+      out.push({
+        name: path.basename(absolute),
+        mimeType,
+        size: stat.size,
+        dataUrl: `data:${mimeType};base64,${buffer.toString('base64')}`,
+      })
+    } catch {
+      // Ignore unreadable files.
+    }
+  }
+
+  return out
+}
+
+async function postWebhook(content, options = {}) {
   const webhookUrl = getWebhookUrl()
   if (!webhookUrl) return
+
+  const filePaths = Array.isArray(options.files) ? options.files.filter((x) => typeof x === 'string' && x.trim()) : []
+  if (!filePaths.length) {
+    await fetch(webhookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content }),
+    }).catch(() => undefined)
+    return
+  }
+
+  const form = new FormData()
+  form.set('payload_json', JSON.stringify({ content }))
+
+  let fileIndex = 0
+  for (const filePath of filePaths) {
+    try {
+      const buffer = fs.readFileSync(filePath)
+      const fileName = path.basename(filePath)
+      form.append(`files[${fileIndex}]`, new Blob([buffer]), fileName)
+      fileIndex += 1
+    } catch {
+      // Ignore unreadable files and continue.
+    }
+  }
+
+  if (fileIndex === 0) {
+    await fetch(webhookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content }),
+    }).catch(() => undefined)
+    return
+  }
+
   await fetch(webhookUrl, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ content }),
+    body: form,
   }).catch(() => undefined)
 }
 
 function startExecutionSession(task) {
   const sessionId = `mc2-${task.id}-${Date.now()}`
+  const imagePaths = writeTaskAttachments(task)
   const message = [
     'Mission Control 2.0 execution task',
     `Task ID: ${task.id}`,
@@ -110,6 +389,9 @@ function startExecutionSession(task) {
     `Objective: ${task.objective ?? ''}`,
     `Target URL: ${task.targetUrl ?? 'not specified'}`,
     `Acceptance Criteria:\n${buildAcceptanceList(task)}`,
+    imagePaths.length
+      ? `Reference images (${imagePaths.length}):\n${imagePaths.map((p, i) => `${i + 1}. ${p}`).join('\n')}\nUse these images as context for implementation.`
+      : 'Reference images: none provided.',
     `Working directory: ${MISSION_CONTROL_ROOT}`,
     'Execution contract:',
     '1) Implement the task in code.',
@@ -235,19 +517,26 @@ function nextTaskId(tasks) {
   return `MC-${maxTaskNumber + 1}`
 }
 
-function createQaFixTask(tasks, sourceTask, qaVerdict) {
+function createQaFixTask(tasks, sourceTask, qaVerdict, qaEvidenceImages = []) {
   const id = nextTaskId(tasks)
-  const reasons = qaVerdict.failureReasons.length
-    ? qaVerdict.failureReasons.map((line, idx) => `${idx + 1}. ${line}`).join('\n')
-    : 'No explicit failure reasons were provided by QA.'
+  const reasonBullets = qaVerdict.failureReasons.length
+    ? qaVerdict.failureReasons.map((line) => `- ${line}`)
+    : ['- No explicit failure reasons were provided by QA.']
+
+  const evidenceLines = qaEvidenceImages.length
+    ? qaEvidenceImages.map((img, idx) => `${idx + 1}. ${img}`).join('\n')
+    : 'No screenshot evidence was captured by QA.'
 
   const objective = [
     `Fix QA failure from ${sourceTask.id} (${sourceTask.title ?? ''}).`,
     '',
     `QA Summary: ${qaVerdict.summary}`,
     '',
-    'Failure reasons:',
-    reasons,
+    'Why failed:',
+    ...reasonBullets,
+    '',
+    'Screenshot evidence:',
+    evidenceLines,
     '',
     'Implementation guidance prompt:',
     qaVerdict.guidancePrompt,
@@ -260,14 +549,123 @@ function createQaFixTask(tasks, sourceTask, qaVerdict) {
     acceptanceCriteria: Array.isArray(sourceTask.acceptanceCriteria) ? sourceTask.acceptanceCriteria : [],
     plan: ['Review QA findings', 'Implement targeted fix', 'Prepare for QA re-test'],
     next: '',
-    tags: Array.from(new Set([...(Array.isArray(sourceTask.tags) ? sourceTask.tags : []), 'qa-fix', 'MissionControl'])),
-    lane: 'triaged',
+    tags: Array.from(new Set([...(Array.isArray(sourceTask.tags) ? sourceTask.tags : []), 'qa-fix', 'qa-fail', 'MissionControl'])),
+    lane: 'backlog',
     createdAt: nowIso(),
     targetUrl: sourceTask.targetUrl,
     sourceTaskId: sourceTask.id,
     qaSummary: qaVerdict.summary,
     qaGuidancePrompt: qaVerdict.guidancePrompt,
+    imageAttachments: buildTaskImageAttachmentsFromPaths(qaEvidenceImages),
   }
+}
+
+function isProcessAlive(pid) {
+  const numericPid = Number(pid)
+  if (!Number.isFinite(numericPid) || numericPid <= 0) return false
+  try {
+    process.kill(numericPid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function finalizeQaTaskOutcome(latestState, task, qaSessionKey, exitCode, completionReason = 'qa_session_closed') {
+  const currentIndex = (latestState.tasks ?? []).findIndex((x) => x.id === task.id)
+  if (currentIndex === -1) return false
+
+  const current = latestState.tasks[currentIndex]
+  if (qaSessionKey && current.qaSessionKey && current.qaSessionKey !== qaSessionKey) return false
+
+  const qaResultRaw = readQaResult(task.id)
+  const qaVerdict = normalizeQaResult(current, qaResultRaw, exitCode)
+  const finishedAt = nowIso()
+
+  latestState.tasks.splice(currentIndex, 1)
+
+  const qaEvidenceImages = collectQaEvidenceImages(current, qaVerdict)
+  const qaEvidenceLine = qaEvidenceImages.length
+    ? `Evidence: attached image${qaEvidenceImages.length > 1 ? 's' : ''} (${qaEvidenceImages.map((p) => path.basename(p)).join(', ')})`
+    : 'Evidence missing: no QA screenshot/artifact image was found.'
+
+  if (qaVerdict.status === 'pass') {
+    pushActivity(latestState, {
+      id: makeId('act'),
+      title: `${current.id} completed`,
+      detail: `${current.title ?? current.id} passed QA and was archived. ${qaVerdict.summary}`,
+      time: 'just now',
+      createdAt: finishedAt,
+    })
+
+    appendDispatchQueue({
+      type: 'qa_dispatch_complete',
+      at: finishedAt,
+      taskId: current.id,
+      qaRunId: current.qaRunId,
+      qaSessionKey: current.qaSessionKey ?? qaSessionKey,
+      exitCode,
+      qaStatus: 'pass',
+      summary: qaVerdict.summary,
+      completionReason,
+      status: 'completed',
+    })
+
+    await postWebhook([
+      '✅ Mission Control QA Passed',
+      `Task: ${current.title ?? current.id}`,
+      'Action: removed from board as completed.',
+      `Summary: ${qaVerdict.summary}`,
+      qaEvidenceLine,
+    ].join('\n'), {
+      files: qaEvidenceImages,
+    })
+  } else {
+    const followUp = createQaFixTask(latestState.tasks, current, qaVerdict, qaEvidenceImages)
+    latestState.tasks.unshift(followUp)
+
+    pushActivity(latestState, {
+      id: makeId('act'),
+      title: `${current.id} QA failed`,
+      detail: `${current.title ?? current.id} failed QA. Created ${followUp.id} in backlog.`,
+      time: 'just now',
+      createdAt: finishedAt,
+    })
+
+    appendDispatchQueue({
+      type: 'qa_dispatch_complete',
+      at: finishedAt,
+      taskId: current.id,
+      qaRunId: current.qaRunId,
+      qaSessionKey: current.qaSessionKey ?? qaSessionKey,
+      exitCode,
+      qaStatus: 'fail',
+      summary: qaVerdict.summary,
+      followUpTaskId: followUp.id,
+      completionReason,
+      status: 'completed',
+    })
+
+    const reasonLines = qaVerdict.failureReasons.length
+      ? qaVerdict.failureReasons.map((line) => `- ${line}`)
+      : ['- no explicit reason returned by QA.']
+
+    await postWebhook([
+      '❌ Mission Control QA Failed',
+      `Task: ${current.title ?? current.id}`,
+      `Created follow-up backlog task: ${followUp.id}`,
+      `Summary: ${qaVerdict.summary}`,
+      'Why failed:',
+      ...reasonLines,
+      qaEvidenceLine,
+    ].join('\n'), {
+      files: qaEvidenceImages,
+    })
+  }
+
+  fs.rmSync(qaResultPathForTask(task.id), { force: true })
+  writeState(latestState)
+  return true
 }
 
 function mergeIncomingTasks(previousTasks, incomingTasks) {
@@ -402,13 +800,17 @@ async function dispatchTriagedTasksFromBoard() {
           status: 'completed',
         })
 
+        const playwrightImages = collectPlaywrightImagesForTask(current)
         await postWebhook([
           '✅ Mission Control Task Execution Ended',
           `Name: ${current.title ?? current.id}`,
           `Description: ${current.objective ?? ''}`,
           `Status: ${current.lane ?? 'in_progress'}`,
           `Summary: ${current.resultSummary}`,
-        ].join('\n'))
+          playwrightImages.length ? `Playwright images: ${playwrightImages.map((p) => path.basename(p)).join(', ')}` : '',
+        ].filter(Boolean).join('\n'), {
+          files: playwrightImages,
+        })
       } catch (error) {
         console.error('[board-bridge] execution close handler error', error)
       }
@@ -453,6 +855,8 @@ async function dispatchTestingTasksForQa() {
       createdAt: now,
     })
 
+    task.qaSpawnedPid = pid
+
     appendDispatchQueue({
       type: 'qa_dispatch_request',
       at: now,
@@ -474,80 +878,7 @@ async function dispatchTestingTasksForQa() {
     child.on('close', async (code) => {
       try {
         const latest = readState()
-        const currentIndex = (latest.tasks ?? []).findIndex((x) => x.id === task.id)
-        if (currentIndex === -1) return
-
-        const current = latest.tasks[currentIndex]
-        if (current.qaSessionKey && current.qaSessionKey !== sessionId) return
-
-        const qaResultRaw = readQaResult(task.id)
-        const qaVerdict = normalizeQaResult(current, qaResultRaw, code)
-        const finishedAt = nowIso()
-
-        latest.tasks.splice(currentIndex, 1)
-
-        if (qaVerdict.status === 'pass') {
-          pushActivity(latest, {
-            id: makeId('act'),
-            title: `${current.id} completed`,
-            detail: `${current.title ?? current.id} passed QA and was archived. ${qaVerdict.summary}`,
-            time: 'just now',
-            createdAt: finishedAt,
-          })
-
-          appendDispatchQueue({
-            type: 'qa_dispatch_complete',
-            at: finishedAt,
-            taskId: current.id,
-            qaRunId: current.qaRunId,
-            qaSessionKey: sessionId,
-            exitCode: code,
-            qaStatus: 'pass',
-            summary: qaVerdict.summary,
-            status: 'completed',
-          })
-
-          await postWebhook([
-            '✅ Mission Control QA Passed',
-            `Task: ${current.title ?? current.id}`,
-            'Action: removed from board as completed.',
-            `Summary: ${qaVerdict.summary}`,
-          ].join('\n'))
-        } else {
-          const followUp = createQaFixTask(latest.tasks, current, qaVerdict)
-          latest.tasks.unshift(followUp)
-
-          pushActivity(latest, {
-            id: makeId('act'),
-            title: `${current.id} QA failed`,
-            detail: `${current.title ?? current.id} failed QA. Created ${followUp.id} in triaged.`,
-            time: 'just now',
-            createdAt: finishedAt,
-          })
-
-          appendDispatchQueue({
-            type: 'qa_dispatch_complete',
-            at: finishedAt,
-            taskId: current.id,
-            qaRunId: current.qaRunId,
-            qaSessionKey: sessionId,
-            exitCode: code,
-            qaStatus: 'fail',
-            summary: qaVerdict.summary,
-            followUpTaskId: followUp.id,
-            status: 'completed',
-          })
-
-          await postWebhook([
-            '❌ Mission Control QA Failed',
-            `Task: ${current.title ?? current.id}`,
-            `Created follow-up triage task: ${followUp.id}`,
-            `Summary: ${qaVerdict.summary}`,
-          ].join('\n'))
-        }
-
-        fs.rmSync(qaResultPathForTask(task.id), { force: true })
-        writeState(latest)
+        await finalizeQaTaskOutcome(latest, task, sessionId, code, 'qa_session_closed')
       } catch (error) {
         console.error('[board-bridge] QA close handler error', error)
       }
@@ -562,6 +893,33 @@ async function dispatchTestingTasksForQa() {
   }
 
   if (changed) writeState(state)
+}
+
+async function recoverStaleOrMissingQaSessions() {
+  const state = readState()
+  const tasks = state?.tasks ?? []
+
+  for (const task of tasks) {
+    if (task?.lane !== 'testing') continue
+    if (task?.qaStatus !== 'running') continue
+
+    const dispatchedAtMs = task?.qaDispatchedAt ? new Date(task.qaDispatchedAt).getTime() : Number.NaN
+    const stale = Number.isFinite(dispatchedAtMs) ? (Date.now() - dispatchedAtMs > QA_STALE_MS) : true
+    const resultReady = Boolean(readQaResult(task.id))
+    const processAlive = isProcessAlive(task?.qaSpawnedPid)
+
+    if (!resultReady && processAlive && !stale) continue
+
+    const completionReason = resultReady
+      ? 'qa_result_detected'
+      : processAlive
+        ? 'qa_session_stale_timeout'
+        : 'qa_session_missing_or_exited'
+
+    const syntheticExitCode = resultReady ? 0 : 1
+    const latest = readState()
+    await finalizeQaTaskOutcome(latest, task, task?.qaSessionKey, syntheticExitCode, completionReason)
+  }
 }
 
 function readSessionLog(sessionId) {
@@ -612,6 +970,302 @@ function readSessionLog(sessionId) {
   }
 }
 
+function collectTaskArtifactImages(taskId) {
+  const safeTaskId = String(taskId || '').trim().toUpperCase()
+  if (!safeTaskId) return []
+
+  const dirs = [QA_RESULTS_DIR, RUN_LOGS_DIR]
+  const imageExt = /\.(png|jpe?g|webp|gif)$/i
+  const names = new Set()
+  const files = []
+
+  for (const dir of dirs) {
+    if (!fs.existsSync(dir)) continue
+    for (const name of fs.readdirSync(dir)) {
+      if (!name.toUpperCase().startsWith(safeTaskId)) continue
+      if (!imageExt.test(name)) continue
+      const fullPath = path.join(dir, name)
+      if (!fs.statSync(fullPath).isFile()) continue
+      if (names.has(fullPath)) continue
+      names.add(fullPath)
+      files.push(fullPath)
+    }
+  }
+
+  files.sort((a, b) => {
+    const aTime = fs.statSync(a).mtimeMs
+    const bTime = fs.statSync(b).mtimeMs
+    return bTime - aTime
+  })
+
+  return files.map((fullPath) => ({
+    name: path.basename(fullPath),
+    sourcePath: fullPath,
+  }))
+}
+
+function resolveSafeArtifactPath(rawPath) {
+  if (!rawPath) return null
+  const resolved = path.resolve(String(rawPath))
+  const roots = [QA_RESULTS_DIR, RUN_LOGS_DIR]
+  for (const root of roots) {
+    const normalizedRoot = `${path.resolve(root)}${path.sep}`
+    if (resolved.startsWith(normalizedRoot)) return resolved
+  }
+  return null
+}
+
+function classifyDocTags(filePath, fileName) {
+  const lowerPath = filePath.toLowerCase()
+  const lowerName = fileName.toLowerCase()
+  const tags = []
+  if (lowerName.includes('readme')) tags.push('readme')
+  if (lowerName.includes('claude')) tags.push('claude')
+  if (lowerName.includes('agent')) tags.push('agent')
+  if (lowerName.includes('memory')) tags.push('memory')
+  if (lowerPath.includes('/docs/')) tags.push('docs')
+  if (!tags.length) tags.push('general')
+  return Array.from(new Set(tags))
+}
+
+function collectProjectDocs() {
+  const docs = []
+  const maxDocs = 240
+  const includeFiles = new Set(['README.md', 'CLAUDE.md', 'AGENTS.md', 'MEMORY.md'])
+  const skipDirs = new Set(['node_modules', '.git', 'dist', 'build', '.next', '.openclaw', '.mc-docs', 'Library'])
+
+  function visitDir(rootDir, relDir = '', depth = 0, projectName = '') {
+    if (docs.length >= maxDocs || depth > 4) return
+
+    let entries = []
+    try {
+      entries = fs.readdirSync(path.join(rootDir, relDir), { withFileTypes: true })
+    } catch {
+      return
+    }
+
+    for (const entry of entries) {
+      if (docs.length >= maxDocs) break
+      const relPath = relDir ? path.join(relDir, entry.name) : entry.name
+      const fullPath = path.join(rootDir, relPath)
+
+      if (entry.isDirectory()) {
+        if (skipDirs.has(entry.name)) continue
+        visitDir(rootDir, relPath, depth + 1, projectName)
+        continue
+      }
+
+      if (!entry.isFile()) continue
+      const isMarkdown = /\.md$/i.test(entry.name)
+      if (!isMarkdown && !includeFiles.has(entry.name)) continue
+
+      let stat
+      let content = ''
+      try {
+        stat = fs.statSync(fullPath)
+        content = fs.readFileSync(fullPath, 'utf8')
+      } catch {
+        continue
+      }
+
+      docs.push({
+        id: `${projectName}:${relPath}`,
+        project: projectName,
+        title: entry.name,
+        path: relPath,
+        absPath: fullPath,
+        tags: classifyDocTags(relPath, entry.name),
+        modifiedAt: stat.mtime.toISOString(),
+        content,
+        readOnly: true,
+        source: 'imported',
+      })
+    }
+  }
+
+  let workspaceEntries = []
+  try {
+    workspaceEntries = fs.readdirSync(WORKSPACE_ROOT, { withFileTypes: true })
+  } catch {
+    return []
+  }
+
+  for (const entry of workspaceEntries) {
+    if (!entry.isDirectory()) continue
+    if (skipDirs.has(entry.name)) continue
+    visitDir(path.join(WORKSPACE_ROOT, entry.name), '', 0, entry.name)
+  }
+
+  // Also include top-level workspace memory/docs files under a virtual project.
+  const personalProject = 'personal-memory'
+  for (const fileName of ['MEMORY.md', 'USER.md', 'SOUL.md', 'AGENTS.md']) {
+    const fullPath = path.join(WORKSPACE_ROOT, fileName)
+    if (!fs.existsSync(fullPath)) continue
+    try {
+      const stat = fs.statSync(fullPath)
+      const content = fs.readFileSync(fullPath, 'utf8')
+      docs.push({
+        id: `${personalProject}:${fileName}`,
+        project: personalProject,
+        title: fileName,
+        path: fileName,
+        absPath: fullPath,
+        tags: classifyDocTags(fileName, fileName),
+        modifiedAt: stat.mtime.toISOString(),
+        content,
+        readOnly: true,
+        source: 'imported',
+      })
+    } catch {}
+  }
+
+  docs.sort((a, b) => new Date(b.modifiedAt).getTime() - new Date(a.modifiedAt).getTime())
+  return docs.slice(0, maxDocs)
+}
+
+function readAuthoredDocs() {
+  const index = readDocStoreIndex()
+  const projects = Array.isArray(index.projects) ? index.projects : []
+  const docsMeta = Array.isArray(index.docs) ? index.docs : []
+  const projectBySlug = new Map(projects.map((project) => [project.slug, project]))
+  const docs = []
+
+  for (const doc of docsMeta) {
+    const project = projectBySlug.get(doc.projectSlug)
+    if (!project) continue
+    const absPath = path.join(DOC_STORE_ROOT, 'projects', doc.projectSlug, `${doc.slug}.md`)
+    if (!fs.existsSync(absPath)) continue
+
+    let content = ''
+    let stat
+    try {
+      content = fs.readFileSync(absPath, 'utf8')
+      stat = fs.statSync(absPath)
+    } catch {
+      continue
+    }
+
+    docs.push({
+      id: `authored:${doc.projectSlug}:${doc.slug}`,
+      project: project.name,
+      projectSlug: project.slug,
+      title: doc.title,
+      path: `.mc-docs/projects/${doc.projectSlug}/${doc.slug}.md`,
+      absPath,
+      tags: sanitizeDocTags(doc.tags),
+      modifiedAt: (doc.updatedAt || stat.mtime.toISOString()),
+      content,
+      readOnly: false,
+      source: 'authored',
+    })
+  }
+
+  docs.sort((a, b) => new Date(b.modifiedAt).getTime() - new Date(a.modifiedAt).getTime())
+  return { projects, docs }
+}
+
+function createDocProject(input) {
+  const name = String(input?.name || '').trim()
+  const description = String(input?.description || '').trim()
+  if (!name) throw new Error('Project name is required')
+
+  const index = readDocStoreIndex()
+  const baseSlug = slugify(input?.slug || name, 'project')
+  let slug = baseSlug
+  let i = 1
+  while (index.projects.some((project) => project.slug === slug)) {
+    i += 1
+    slug = `${baseSlug}-${i}`
+  }
+
+  const project = {
+    slug,
+    name,
+    description,
+    createdAt: nowIso(),
+    updatedAt: nowIso(),
+  }
+  index.projects = [project, ...index.projects]
+  writeDocStoreIndex(index)
+
+  fs.mkdirSync(path.join(DOC_STORE_ROOT, 'projects', slug), { recursive: true })
+  return project
+}
+
+function saveAuthoredDoc(input) {
+  const projectSlug = String(input?.projectSlug || '').trim()
+  const title = String(input?.title || '').trim()
+  const content = String(input?.content || '')
+  if (!projectSlug) throw new Error('projectSlug is required')
+  if (!title) throw new Error('title is required')
+
+  const index = readDocStoreIndex()
+  const project = index.projects.find((item) => item.slug === projectSlug)
+  if (!project) throw new Error(`Unknown project: ${projectSlug}`)
+
+  const tags = sanitizeDocTags(input?.tags)
+  const maybeDocId = String(input?.docId || '')
+  const isUpdating = maybeDocId.startsWith('authored:')
+
+  let slug = slugify(input?.slug || title, 'doc')
+  if (isUpdating) {
+    const existingSlug = maybeDocId.split(':')[2]
+    if (existingSlug) slug = existingSlug
+  } else {
+    let i = 1
+    const base = slug
+    while (index.docs.some((doc) => doc.projectSlug === projectSlug && doc.slug === slug)) {
+      i += 1
+      slug = `${base}-${i}`
+    }
+  }
+
+  const docDir = path.join(DOC_STORE_ROOT, 'projects', projectSlug)
+  fs.mkdirSync(docDir, { recursive: true })
+  const absPath = path.join(docDir, `${slug}.md`)
+  fs.writeFileSync(absPath, content, 'utf8')
+
+  const now = nowIso()
+  const existingIndex = index.docs.findIndex((doc) => doc.projectSlug === projectSlug && doc.slug === slug)
+  const nextMeta = {
+    projectSlug,
+    slug,
+    title,
+    tags,
+    createdAt: existingIndex >= 0 ? index.docs[existingIndex].createdAt : now,
+    updatedAt: now,
+  }
+
+  if (existingIndex >= 0) index.docs[existingIndex] = nextMeta
+  else index.docs.unshift(nextMeta)
+
+  project.updatedAt = now
+  writeDocStoreIndex(index)
+
+  return {
+    id: `authored:${projectSlug}:${slug}`,
+    project: project.name,
+    projectSlug,
+    title,
+    path: `.mc-docs/projects/${projectSlug}/${slug}.md`,
+    absPath,
+    tags,
+    modifiedAt: now,
+    content,
+    readOnly: false,
+    source: 'authored',
+  }
+}
+
+function collectDocsPayload() {
+  const imported = collectProjectDocs()
+  const authored = readAuthoredDocs()
+  return {
+    docs: [...authored.docs, ...imported].sort((a, b) => new Date(b.modifiedAt).getTime() - new Date(a.modifiedAt).getTime()),
+    projects: authored.projects,
+  }
+}
+
 process.on('uncaughtException', (error) => {
   console.error('[board-bridge] uncaught exception', error)
 })
@@ -622,7 +1276,7 @@ process.on('unhandledRejection', (reason) => {
 
 const server = http.createServer((req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*')
-  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS')
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,OPTIONS')
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
 
   const url = new URL(req.url || '/', `http://127.0.0.1:${PORT}`)
@@ -648,6 +1302,89 @@ const server = http.createServer((req, res) => {
     return
   }
 
+  if (url.pathname === '/task-artifacts' && req.method === 'GET') {
+    const taskId = url.searchParams.get('taskId') || ''
+    const origin = `http://${req.headers.host || `127.0.0.1:${PORT}`}`
+    const images = collectTaskArtifactImages(taskId).map((img) => ({
+      ...img,
+      url: `${origin}/artifact-file?path=${encodeURIComponent(img.sourcePath)}`,
+    }))
+    res.setHeader('Content-Type', 'application/json; charset=utf-8')
+    res.end(JSON.stringify({ taskId, images }))
+    return
+  }
+
+  if (url.pathname === '/docs' && req.method === 'GET') {
+    const payload = collectDocsPayload()
+    res.setHeader('Content-Type', 'application/json; charset=utf-8')
+    res.end(JSON.stringify(payload))
+    return
+  }
+
+  if (url.pathname === '/docs/projects' && req.method === 'POST') {
+    let body = ''
+    req.on('data', (chunk) => {
+      body += chunk
+      if (body.length > 100_000) req.destroy()
+    })
+    req.on('end', () => {
+      try {
+        const parsed = JSON.parse(body || '{}')
+        const project = createDocProject(parsed)
+        res.setHeader('Content-Type', 'application/json; charset=utf-8')
+        res.end(JSON.stringify({ ok: true, project }))
+      } catch (error) {
+        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' })
+        res.end(JSON.stringify({ ok: false, error: error instanceof Error ? error.message : 'Failed to create project' }))
+      }
+    })
+    return
+  }
+
+  if (url.pathname === '/docs/doc' && (req.method === 'POST' || req.method === 'PUT')) {
+    let body = ''
+    req.on('data', (chunk) => {
+      body += chunk
+      if (body.length > 1_500_000) req.destroy()
+    })
+    req.on('end', () => {
+      try {
+        const parsed = JSON.parse(body || '{}')
+        const doc = saveAuthoredDoc(parsed)
+        res.setHeader('Content-Type', 'application/json; charset=utf-8')
+        res.end(JSON.stringify({ ok: true, doc }))
+      } catch (error) {
+        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' })
+        res.end(JSON.stringify({ ok: false, error: error instanceof Error ? error.message : 'Failed to save document' }))
+      }
+    })
+    return
+  }
+
+  if (url.pathname === '/artifact-file' && req.method === 'GET') {
+    const filePath = resolveSafeArtifactPath(url.searchParams.get('path'))
+    if (!filePath || !fs.existsSync(filePath)) {
+      res.writeHead(404)
+      res.end('Not found')
+      return
+    }
+
+    const ext = path.extname(filePath).toLowerCase()
+    const contentType = ext === '.png'
+      ? 'image/png'
+      : ext === '.jpg' || ext === '.jpeg'
+        ? 'image/jpeg'
+        : ext === '.webp'
+          ? 'image/webp'
+          : ext === '.gif'
+            ? 'image/gif'
+            : 'application/octet-stream'
+
+    res.setHeader('Content-Type', contentType)
+    fs.createReadStream(filePath).pipe(res)
+    return
+  }
+
   if (url.pathname === '/state' && req.method === 'POST') {
     let body = ''
     req.on('data', (chunk) => {
@@ -658,14 +1395,21 @@ const server = http.createServer((req, res) => {
       try {
         const parsed = JSON.parse(body || '{}')
         const previous = readState()
+        const baseUpdatedAt = typeof parsed.baseUpdatedAt === 'string' ? parsed.baseUpdatedAt : ''
+        if (baseUpdatedAt && previous.updatedAt && baseUpdatedAt !== previous.updatedAt) {
+          res.writeHead(409, { 'Content-Type': 'application/json; charset=utf-8' })
+          res.end(JSON.stringify({ ok: false, conflict: true, state: previous }))
+          return
+        }
 
         const incomingTasks = Array.isArray(parsed.tasks)
           ? mergeIncomingTasks(previous.tasks, parsed.tasks)
           : (previous.tasks ?? [])
 
+        const { baseUpdatedAt: _ignoredBaseUpdatedAt, ...parsedWithoutBase } = parsed
         const merged = {
           ...previous,
-          ...parsed,
+          ...parsedWithoutBase,
           tasks: incomingTasks,
           activity: Array.isArray(parsed.activity) ? parsed.activity : (previous.activity ?? []),
         }
@@ -699,6 +1443,7 @@ setInterval(() => {
   nextPickupAtMs = Date.now() + DISPATCH_INTERVAL_MS
   dispatchTriagedTasksFromBoard()
     .then(() => dispatchTestingTasksForQa())
+    .then(() => recoverStaleOrMissingQaSessions())
     .catch((error) => {
       console.error('[board-bridge] dispatch scan error', error)
     })
