@@ -12,7 +12,7 @@ body {
 .mc-shell {
   min-height: 100vh;
   display: grid;
-  grid-template-columns: 120px 1fr;
+  grid-template-columns: 140px 1fr;
   gap: 12px;
   padding: 10px;
   background: #060b16;
@@ -53,19 +53,39 @@ body {
 }
 
 .nav-item {
+  position: relative;
   border: 1px solid transparent;
   background: transparent;
   color: #d5dff8;
   text-align: left;
   border-radius: 12px;
-  padding: 9px 12px;
+  padding: 9px 12px 9px 16px;
   font-size: 15px;
   cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.nav-item:hover {
+  background: rgba(87, 118, 255, 0.1);
+  color: #edf2ff;
 }
 
 .nav-item.active {
   background: rgba(87, 118, 255, 0.2);
   border-color: rgba(87, 118, 255, 0.45);
+  color: #fff;
+}
+
+.nav-item.active::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 60%;
+  background: #5574ff;
+  border-radius: 0 2px 2px 0;
 }
 
 .mc-main {
@@ -105,11 +125,23 @@ body {
 
 .chip {
   display: inline-flex;
+  align-items: center;
+  gap: 6px;
   border-radius: 999px;
   background: rgba(133, 150, 197, 0.18);
   border: 1px solid rgba(133, 150, 197, 0.25);
   padding: 7px 12px;
   font-size: 13px;
+  animation: chipPulse 2s ease-in-out infinite;
+}
+
+@keyframes chipPulse {
+  0%, 100% {
+    border-color: rgba(133, 150, 197, 0.25);
+  }
+  50% {
+    border-color: rgba(133, 150, 197, 0.5);
+  }
 }
 
 button {
@@ -119,6 +151,16 @@ button {
   color: #f2f6ff;
   font-weight: 600;
   cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+button:active {
+  transform: translateY(0);
 }
 
 button.ghost {
@@ -126,8 +168,18 @@ button.ghost {
   border: 1px solid rgba(133, 150, 197, 0.28);
 }
 
+button.ghost:hover {
+  background: rgba(133, 150, 197, 0.28);
+  border-color: rgba(133, 150, 197, 0.45);
+}
+
 button.primary {
   background: #5574ff;
+}
+
+button.primary:hover {
+  background: #6685ff;
+  box-shadow: 0 4px 16px rgba(85, 116, 255, 0.4);
 }
 
 .stats-row {
@@ -135,6 +187,7 @@ button.primary {
   padding: 16px;
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
 }
 
 .stat {
@@ -146,6 +199,14 @@ button.primary {
   border-radius: 12px;
   padding: 12px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+  transition: all 0.3s ease;
+  cursor: default;
+}
+
+.stat:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  border-color: rgba(92, 116, 186, 0.5);
 }
 
 .stat strong {
@@ -157,7 +218,7 @@ button.primary {
 
 .stat span {
   color: #cfd9f5;
-  font-size: 34px;
+  font-size: 28px;
 }
 
 .stat.green strong { color: #45e28b; }
@@ -177,7 +238,7 @@ button.primary {
 
 .lanes-grid {
   display: grid;
-  grid-template-columns: 1.3fr 1.1fr 1fr 0.85fr;
+  grid-template-columns: 1fr 1fr 1fr 1fr;
   gap: 10px;
 }
 
@@ -197,10 +258,28 @@ button.primary {
 }
 
 .lane-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   padding: 12px 12px;
   border-bottom: 1px solid rgba(92, 116, 186, 0.2);
-  font-size: 34px;
+  font-size: 28px;
   font-weight: 700;
+}
+
+.lane-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  height: 28px;
+  padding: 0 8px;
+  background: rgba(133, 150, 197, 0.25);
+  border: 1px solid rgba(133, 150, 197, 0.35);
+  border-radius: 999px;
+  font-size: 18px;
+  font-weight: 600;
+  color: #d5dff8;
 }
 
 .lane-body {
@@ -209,6 +288,20 @@ button.primary {
   flex-direction: column;
   gap: 10px;
   min-height: 200px;
+}
+
+.lane-body:empty::before {
+  content: "Drop tasks here";
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: rgba(157, 174, 217, 0.4);
+  font-size: 24px;
+  font-style: italic;
+  border: 2px dashed rgba(92, 116, 186, 0.15);
+  border-radius: 12px;
+  padding: 40px;
 }
 
 .task-card {
@@ -297,7 +390,7 @@ button.primary {
 .activity-panel h3 {
   margin: 0 0 12px;
   letter-spacing: .08em;
-  font-size: 34px;
+  font-size: 28px;
 }
 
 .running-box {
@@ -306,6 +399,9 @@ button.primary {
   background: #0a1531;
   padding: 12px;
   margin-bottom: 16px;
+}
+
+.running-box:has(p:not(:only-child)) {
   animation: pulse 2s ease-in-out infinite;
 }
 
@@ -320,12 +416,17 @@ button.primary {
 
 .running-box span {
   color: #98abd9;
-  font-size: 23px;
+  font-size: 20px;
 }
 
 .running-box p {
   margin: 8px 0 0;
-  font-size: 38px;
+  font-size: 32px;
+}
+
+.running-box p:only-child {
+  opacity: 0.5;
+  font-style: italic;
 }
 
 .activity-list {

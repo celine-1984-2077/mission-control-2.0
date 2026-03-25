@@ -291,7 +291,10 @@ function App() {
             <div className="lanes-grid">
               {lanes.map((lane) => (
                 <div key={lane.key} className={`lane ${dragOverLane === lane.key ? 'lane-over' : ''}`} onDragOver={(e) => { e.preventDefault(); setDragOverLane(lane.key) }} onDragLeave={() => setDragOverLane((prev) => (prev === lane.key ? null : prev))}>
-                  <div className="lane-header">{lane.label}</div>
+                  <div className="lane-header">
+                    {lane.label}
+                    <span className="lane-count">{grouped[lane.key].length}</span>
+                  </div>
                   <div className="lane-body" onDrop={(e) => { e.preventDefault(); const draggedId = getDraggedId(e); if (draggedId) moveTask(draggedId, lane.key) }}>
                     {grouped[lane.key].map((task) => (
                       <article key={task.id} draggable className={`task-card ${draggingTaskId === task.id ? 'dragging' : ''}`} onDragStart={(e) => { e.dataTransfer.setData('text/task-id', task.id); e.dataTransfer.setData('text/plain', task.id); draggingTaskRef.current = task.id; setDraggingTaskId(task.id) }} onDragEnd={() => { setDragOverLane(null); setDraggingTaskId(null); draggingTaskRef.current = null }} onDragOver={(e) => { e.preventDefault(); e.stopPropagation() }} onDrop={(e) => { e.preventDefault(); e.stopPropagation(); const draggedId = getDraggedId(e); if (draggedId && draggedId !== task.id) moveTask(draggedId, lane.key, task.id) }} onClick={() => openTaskDetail(task)}>
