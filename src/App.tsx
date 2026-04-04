@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type DragEvent, type FormEvent, type MouseEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type FormEvent, type MouseEvent } from 'react'
 import './App.css'
 
 type ColumnKey = 'backlog' | 'triaged' | 'in_progress' | 'testing'
@@ -10,6 +10,60 @@ type TaskImageAttachment = {
   size: number
 }
 
+type PlanItemStatus = 'pending' | 'running' | 'done' | 'failed' | 'aborted'
+
+type PlanItem = {
+  id: string
+  title: string
+  status: PlanItemStatus
+  details?: string
+  kind?: string
+  updatedAt?: string
+  sessionId?: string
+  userAbortable?: boolean
+}
+
+type ClarificationOption = {
+  label: string
+  description: string
+}
+
+type ClarificationQuestion = {
+  id: string
+  header: string
+  question: string
+  required: boolean
+  options: ClarificationOption[]
+  answer?: string
+  notes?: string
+  status?: 'pending' | 'answered'
+}
+
+type VerificationCheck = {
+  id: string
+  label: string
+  status: 'pending' | 'running' | 'passed' | 'failed' | 'skipped'
+  detail?: string
+}
+
+type VerificationState = {
+  status: 'pending' | 'running' | 'passed' | 'failed'
+  verdict?: 'pass' | 'fail' | 'partial'
+  summary?: string
+  evidence?: string[]
+  checks?: VerificationCheck[]
+}
+
+type HarnessCapabilities = {
+  browser: string[]
+  qa: string[]
+  design: string[]
+}
+
+type CreateTaskKind = 'design' | 'bugfix' | 'feature' | 'docs'
+type CreateQaPreference = 'auto' | 'browser' | 'skip'
+type CreateUrlMode = 'none' | 'home' | 'specific' | 'infer'
+
 type Task = {
   id: string
   title: string
@@ -18,6 +72,11 @@ type Task = {
   acceptanceCriteria?: string[]
   imageAttachments?: TaskImageAttachment[]
   plan: string[]
+  planItems?: PlanItem[]
+  clarificationQuestions?: ClarificationQuestion[]
+  verification?: VerificationState
+  harnessCapabilities?: HarnessCapabilities
+  dispatchBlockedReason?: string
   next?: string
   tags: string[]
   lane: ColumnKey
@@ -64,12 +123,17 @@ type DocProject = {
   description?: string
 }
 
-const navItems = ['Project', 'Docs']
+type BridgeSettings = {
+  webhookUrl: string
+  source: string
+}
+
+const navItems = ['Project', 'Docs', 'Settings']
 const lanes: Array<{ key: ColumnKey; label: string }> = [
-  { key: 'backlog', label: 'Backlog' },
-  { key: 'triaged', label: 'Triaged' },
-  { key: 'in_progress', label: 'In Progress' },
-  { key: 'testing', label: 'Testing' },
+  { key: 'backlog', label: 'Ideas' },
+  { key: 'triaged', label: 'Ready to Start' },
+  { key: 'in_progress', label: 'Working on It' },
+  { key: 'testing', label: 'Needs Your Review' },
 ]
 
 const BRIDGE_BASE_URL = (import.meta.env.VITE_BOARD_BRIDGE_BASE_URL as string | undefined) || 'http://127.0.0.1:8787'
@@ -79,6 +143,12 @@ const TASK_ARTIFACTS_URL = `${BRIDGE_BASE_URL}/task-artifacts`
 const DOCS_URL = `${BRIDGE_BASE_URL}/docs`
 const DOC_PROJECTS_URL = `${BRIDGE_BASE_URL}/docs/projects`
 const DOC_SAVE_URL = `${BRIDGE_BASE_URL}/docs/doc`
+const SETTINGS_URL = `${BRIDGE_BASE_URL}/settings`
+const DEFAULT_HARNESS_CAPABILITIES: HarnessCapabilities = {
+  browser: ['playwright', 'session-log-screenshots'],
+  qa: ['structured-verdict', 'evidence-images', 'discord-webhook'],
+  design: ['reference-images', 'project-docs'],
+}
 
 const initialActivity: Activity[] = []
 
@@ -108,6 +178,234 @@ function extractTaskIdFromText(...parts: Array<string | undefined>) {
   return match ? match[0].toUpperCase() : null
 }
 
+function isLikelyWebsiteTask(task: Pick<Task, 'title' | 'objective' | 'targetUrl' | 'tags'>) {
+  const text = [task.title, task.objective, ...(task.tags ?? [])].join(' ').toLowerCase()
+  return Boolean(task.targetUrl?.trim()) || /(web|website|网页|页面|ui|frontend|button|click|browser|截图|playwright|qa|docs)/.test(text)
+}
+
+function buildDefaultClarificationQuestions(task: Pick<Task, 'title' | 'objective' | 'targetUrl' | 'tags'>): ClarificationQuestion[] {
+  const questions: ClarificationQuestion[] = [
+    {
+      id: 'definition-of-done',
+      header: 'Outcome',
+      question: 'What should feel obviously successful when this task is done?',
+      required: false,
+      options: [
+        { label: 'Visible UI', description: 'A user-facing screen or interaction should clearly change.' },
+        { label: 'Behavior fix', description: 'An existing bug or broken flow should work reliably.' },
+        { label: 'Automation', description: 'The system should run something for me automatically.' },
+      ],
+      answer: '',
+      notes: '',
+      status: 'pending',
+    },
+  ]
+
+  if (isLikelyWebsiteTask(task) && !task.targetUrl?.trim()) {
+    questions.push({
+      id: 'target-url',
+      header: 'Target URL',
+      question: 'Which page should browser QA open first?',
+      required: true,
+      options: [
+        { label: 'Local app', description: 'Use the default local app URL from this workspace.' },
+        { label: 'Specific URL', description: 'I will provide the exact URL in the task.' },
+        { label: 'Infer it', description: 'Infer the best local URL from the project setup.' },
+      ],
+      answer: '',
+      notes: '',
+      status: 'pending',
+    })
+  }
+
+  questions.push({
+    id: 'risk-focus',
+    header: 'Focus',
+    question: 'Where should verification be strictest?',
+    required: false,
+    options: [
+      { label: 'Happy path', description: 'Prioritize the main user flow and expected behavior.' },
+      { label: 'Edge cases', description: 'Probe error handling and retries.' },
+      { label: 'Visual polish', description: 'Pay extra attention to design and browser details.' },
+    ],
+    answer: '',
+    notes: '',
+    status: 'pending',
+  })
+
+  return questions
+}
+
+function buildDefaultPlanItems(task: Pick<Task, 'clarificationQuestions'>): PlanItem[] {
+  const hasBlockingClarification = (task.clarificationQuestions ?? []).some((q) => q.required && !q.answer?.trim())
+  return [
+    { id: 'clarify', title: 'Clarify the task with the user', status: hasBlockingClarification ? 'running' : 'done', kind: 'clarify' },
+    { id: 'implement', title: 'Implement the requested work', status: 'pending', kind: 'implement' },
+    { id: 'verify', title: 'Run verification and browser QA', status: 'pending', kind: 'verify' },
+  ]
+}
+
+function buildDefaultVerification(task: Pick<Task, 'targetUrl' | 'title' | 'objective' | 'tags'>): VerificationState {
+  const checks: VerificationCheck[] = [
+    { id: 'build', label: 'Build or type-check the project', status: 'pending' },
+    { id: 'tests', label: 'Run automated tests where available', status: 'pending' },
+    ...(isLikelyWebsiteTask(task) ? [{ id: 'browser', label: 'Exercise the UI in a browser and capture evidence', status: 'pending' as const }] : []),
+    { id: 'regression', label: 'Probe regressions and edge cases', status: 'pending' },
+  ]
+  return { status: 'pending', summary: '', evidence: [], checks }
+}
+
+function normalizeTask(task: Task): Task {
+  const clarificationQuestions = (task.clarificationQuestions?.length ? task.clarificationQuestions : buildDefaultClarificationQuestions(task)).map((question) => ({
+    ...question,
+    answer: question.answer ?? '',
+    notes: question.notes ?? '',
+    status: (question.answer?.trim() ? 'answered' : 'pending') as 'pending' | 'answered',
+  }))
+
+  const planItems = (task.planItems?.length ? task.planItems : buildDefaultPlanItems({ clarificationQuestions })).map((item) => ({
+    ...item,
+    details: item.details ?? '',
+  }))
+
+  return {
+    ...task,
+    plan: task.plan?.length ? task.plan : planItems.map((item) => item.title),
+    clarificationQuestions,
+    planItems,
+    verification: task.verification ?? buildDefaultVerification(task),
+    harnessCapabilities: task.harnessCapabilities ?? DEFAULT_HARNESS_CAPABILITIES,
+    imageAttachments: task.imageAttachments ?? [],
+    acceptanceCriteria: task.acceptanceCriteria ?? [],
+    tags: task.tags ?? [],
+  }
+}
+
+function taskNeedsClarification(task: Task) {
+  return (task.clarificationQuestions ?? []).some((question) => question.required && !question.answer?.trim())
+}
+
+function statusGlyph(status: PlanItemStatus) {
+  if (status === 'done') return '✅'
+  if (status === 'failed') return '❌'
+  if (status === 'aborted') return '⏹'
+  if (status === 'running') return '●'
+  return '☐'
+}
+
+function userLaneLabel(lane: ColumnKey) {
+  if (lane === 'backlog') return 'Idea'
+  if (lane === 'triaged') return 'Ready to Start'
+  if (lane === 'in_progress') return 'Working on It'
+  return 'Needs Your Review'
+}
+
+function userFacingTaskState(task: Task) {
+  if (task.dispatchBlockedReason === 'clarification_required') {
+    return 'Waiting for your answer'
+  }
+  if (task.verification?.verdict === 'partial') {
+    return 'Needs a little help'
+  }
+  if (task.verification?.verdict === 'fail') {
+    return 'Needs a fix'
+  }
+  if (task.verification?.verdict === 'pass') {
+    return 'Finished'
+  }
+  if (task.lane === 'backlog') return 'Idea'
+  if (task.lane === 'triaged') return 'Ready to run'
+  if (task.lane === 'in_progress') return 'Working on it'
+  return 'Waiting for your review'
+}
+
+function userFacingVerificationStatus(task: Task) {
+  if (task.verification?.verdict === 'pass') return 'Finished'
+  if (task.verification?.verdict === 'fail') return 'Failed checks'
+  if (task.verification?.verdict === 'partial') return 'Blocked or incomplete'
+  if (task.verification?.status === 'running') return 'Checking now'
+  if (task.verification?.status === 'passed') return 'Finished'
+  if (task.verification?.status === 'failed') return 'Failed checks'
+  return 'Not checked yet'
+}
+
+function buildAcceptanceCriteriaFromWizard(kind: CreateTaskKind, qaPreference: CreateQaPreference, goal: string) {
+  const trimmedGoal = goal.trim()
+  const subject = trimmedGoal || 'the requested task'
+  const criteria = []
+
+  if (kind === 'design') {
+    criteria.push(`The visual design change for "${subject}" is clearly visible and coherent.`)
+    criteria.push('The updated UI feels intentional on desktop and mobile.')
+  } else if (kind === 'bugfix') {
+    criteria.push(`The original issue in "${subject}" is no longer reproducible.`)
+    criteria.push('Related behavior still works after the fix.')
+  } else if (kind === 'feature') {
+    criteria.push(`The new feature for "${subject}" is usable end to end.`)
+    criteria.push('The main happy path works without manual intervention.')
+  } else {
+    criteria.push(`The documentation or memory entry for "${subject}" is saved and readable.`)
+    criteria.push('The content stays available after refresh or reload.')
+  }
+
+  if (qaPreference !== 'skip') {
+    criteria.push('Verification includes concrete evidence before the task is considered done.')
+  }
+
+  return criteria
+}
+
+function buildTaskDraftFromWizard(input: {
+  goal: string
+  kind: CreateTaskKind
+  qaPreference: CreateQaPreference
+  urlMode: CreateUrlMode
+  specificUrl: string
+}) {
+  const goal = input.goal.trim()
+  const prefix = input.kind === 'design'
+    ? 'Design'
+    : input.kind === 'bugfix'
+      ? 'Fix'
+      : input.kind === 'feature'
+        ? 'Build'
+        : 'Document'
+  const title = goal ? `${prefix}: ${goal}` : ''
+  const objectiveParts = [goal]
+
+  if (input.kind === 'design') objectiveParts.push('Prioritize a polished user-facing result.')
+  if (input.kind === 'bugfix') objectiveParts.push('Focus on the broken behavior first, then confirm the regression is gone.')
+  if (input.kind === 'feature') objectiveParts.push('Implement the missing behavior end to end.')
+  if (input.kind === 'docs') objectiveParts.push('Make the result understandable for future reuse.')
+
+  if (input.qaPreference === 'browser') objectiveParts.push('Use browser QA as part of the default verification path.')
+  if (input.qaPreference === 'skip') objectiveParts.push('Skip browser QA unless the implementation clearly requires it.')
+
+  if (input.urlMode === 'home') objectiveParts.push('Start verification from the local home page.')
+  if (input.urlMode === 'infer') objectiveParts.push('Infer the best local page to test from the project setup.')
+  if (input.urlMode === 'specific' && input.specificUrl.trim()) objectiveParts.push(`Use ${input.specificUrl.trim()} as the primary page for QA.`)
+
+  const targetUrl = input.urlMode === 'specific'
+    ? input.specificUrl.trim() || undefined
+    : input.urlMode === 'home'
+      ? 'http://127.0.0.1:5173'
+      : undefined
+
+  const tags = [
+    input.kind,
+    ...(input.qaPreference === 'browser' ? ['browser-qa'] : []),
+    'MissionControl',
+  ]
+
+  return {
+    title,
+    objective: objectiveParts.filter(Boolean).join(' '),
+    acceptanceCriteria: buildAcceptanceCriteriaFromWizard(input.kind, input.qaPreference, goal),
+    targetUrl,
+    tags,
+  }
+}
+
 function App() {
   const [activeNav, setActiveNav] = useState('Project')
   const [tasks, setTasks] = useState<Task[]>([])
@@ -126,6 +424,10 @@ function App() {
   const [newTaskObjective, setNewTaskObjective] = useState('')
   const [newTaskAcceptance, setNewTaskAcceptance] = useState('')
   const [newTaskTargetUrl, setNewTaskTargetUrl] = useState('')
+  const [createTaskKind, setCreateTaskKind] = useState<CreateTaskKind>('feature')
+  const [createQaPreference, setCreateQaPreference] = useState<CreateQaPreference>('auto')
+  const [createUrlMode, setCreateUrlMode] = useState<CreateUrlMode>('infer')
+  const [createSpecificUrl, setCreateSpecificUrl] = useState('')
   const [newTaskImageFiles, setNewTaskImageFiles] = useState<File[]>([])
   const [createError, setCreateError] = useState('')
   const createImageInputRef = useRef<HTMLInputElement | null>(null)
@@ -162,6 +464,12 @@ function App() {
   const [docDraftContent, setDocDraftContent] = useState('')
   const [docDraftProjectSlug, setDocDraftProjectSlug] = useState('')
   const [creatingDoc, setCreatingDoc] = useState(false)
+  const [settings, setSettings] = useState<BridgeSettings>({ webhookUrl: '', source: 'unset' })
+  const [settingsDraft, setSettingsDraft] = useState('')
+  const [settingsLoading, setSettingsLoading] = useState(false)
+  const [settingsSaving, setSettingsSaving] = useState(false)
+  const [settingsError, setSettingsError] = useState('')
+  const [settingsOk, setSettingsOk] = useState('')
 
   const suppressSaveRef = useRef(false)
   const modalDragEventAtRef = useRef<number>(0)
@@ -193,6 +501,13 @@ function App() {
 
   const inProgressCount = grouped.in_progress.length
   const completion = tasks.length ? Math.round((grouped.testing.length / tasks.length) * 100) : 0
+  const createDraft = useMemo(() => buildTaskDraftFromWizard({
+    goal: newTaskObjective,
+    kind: createTaskKind,
+    qaPreference: createQaPreference,
+    urlMode: createUrlMode,
+    specificUrl: createSpecificUrl,
+  }), [newTaskObjective, createTaskKind, createQaPreference, createUrlMode, createSpecificUrl])
 
   const docProjects = useMemo(() => Array.from(new Set(docs.map((doc) => doc.project))).sort(), [docs])
   const authoredProjects = useMemo(() => docProjectsMeta, [docProjectsMeta])
@@ -228,16 +543,18 @@ function App() {
       if (!response.ok) return
       const payload = await response.json() as { tasks?: Task[]; activity?: Activity[]; nextPickupAt?: string; updatedAt?: string }
       suppressSaveRef.current = true
-      if (Array.isArray(payload.tasks)) setTasks(payload.tasks)
+      if (Array.isArray(payload.tasks)) setTasks(payload.tasks.map((task) => normalizeTask(task)))
       if (Array.isArray(payload.activity)) setActivity(payload.activity)
       if (payload.nextPickupAt) setNextPickupAt(payload.nextPickupAt)
       if (payload.updatedAt) setBoardUpdatedAt(payload.updatedAt)
       setHydrated(true)
       setTimeout(() => { suppressSaveRef.current = false }, 50)
-    } catch {}
+    } catch {
+      return
+    }
   }
 
-  async function loadDocs() {
+  const loadDocs = useCallback(async () => {
     setDocsLoading(true)
     setDocsError('')
     try {
@@ -253,7 +570,24 @@ function App() {
     } finally {
       setDocsLoading(false)
     }
-  }
+  }, [selectedDocId])
+
+  const loadSettings = useCallback(async () => {
+    setSettingsLoading(true)
+    setSettingsError('')
+    try {
+      const response = await fetch(SETTINGS_URL)
+      if (!response.ok) throw new Error(`Failed to fetch settings (${response.status})`)
+      const payload = await response.json() as { settings?: BridgeSettings }
+      const nextSettings = payload.settings ?? { webhookUrl: '', source: 'unset' }
+      setSettings(nextSettings)
+      setSettingsDraft(nextSettings.webhookUrl ?? '')
+    } catch (error) {
+      setSettingsError(error instanceof Error ? error.message : 'Failed to load settings')
+    } finally {
+      setSettingsLoading(false)
+    }
+  }, [])
 
   async function createDocProject() {
     if (!newProjectName.trim()) {
@@ -333,20 +667,51 @@ function App() {
     }
   }
 
-  async function saveBoard(nextTasks: Task[], nextActivity: Activity[]) {
+  async function saveBoard(nextTasks: Task[], nextActivity: Activity[], overrideBaseUpdatedAt?: string, retryCount = 0): Promise<void> {
     if (!hydrated) return
     if (suppressSaveRef.current) return
-    fetch(BOARD_BRIDGE_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tasks: nextTasks, activity: nextActivity, baseUpdatedAt: boardUpdatedAt || undefined }),
-    })
-      .then(async (response) => {
-        if (!response.ok) return
-        const payload = await response.json() as { state?: { updatedAt?: string } }
-        if (payload?.state?.updatedAt) setBoardUpdatedAt(payload.state.updatedAt)
+    try {
+      const response = await fetch(BOARD_BRIDGE_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tasks: nextTasks, activity: nextActivity, baseUpdatedAt: (overrideBaseUpdatedAt ?? boardUpdatedAt) || undefined }),
       })
-      .catch(() => undefined)
+      const payload = await response.json().catch(() => ({})) as {
+        conflict?: boolean
+        state?: { updatedAt?: string }
+      }
+      if (response.status === 409 && payload.conflict && payload.state?.updatedAt && retryCount < 1) {
+        setBoardUpdatedAt(payload.state.updatedAt)
+        await saveBoard(nextTasks, nextActivity, payload.state.updatedAt, retryCount + 1)
+        return
+      }
+      if (!response.ok) return
+      if (payload?.state?.updatedAt) setBoardUpdatedAt(payload.state.updatedAt)
+    } catch {
+      return
+    }
+  }
+
+  async function saveSettings() {
+    setSettingsSaving(true)
+    setSettingsError('')
+    setSettingsOk('')
+    try {
+      const response = await fetch(SETTINGS_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ webhookUrl: settingsDraft.trim() }),
+      })
+      const payload = await response.json() as { ok?: boolean; error?: string; settings?: BridgeSettings }
+      if (!response.ok || !payload.ok || !payload.settings) throw new Error(payload.error || 'Failed to save settings')
+      setSettings(payload.settings)
+      setSettingsDraft(payload.settings.webhookUrl)
+      setSettingsOk(payload.settings.webhookUrl ? 'Discord webhook saved.' : 'Discord webhook cleared.')
+    } catch (error) {
+      setSettingsError(error instanceof Error ? error.message : 'Failed to save settings')
+    } finally {
+      setSettingsSaving(false)
+    }
   }
   useEffect(() => {
     loadBoardFromServer()
@@ -365,7 +730,10 @@ function App() {
     if (activeNav === 'Docs') {
       void loadDocs()
     }
-  }, [activeNav])
+    if (activeNav === 'Settings') {
+      void loadSettings()
+    }
+  }, [activeNav, loadDocs, loadSettings])
 
   useEffect(() => {
     if (!visibleDocList.length) return
@@ -392,7 +760,11 @@ function App() {
     const moving = tasks.find((t) => t.id === taskId)
     if (!moving) return
 
-    const moved: Task = { ...moving, lane }
+    const moved: Task = normalizeTask({
+      ...moving,
+      lane,
+      dispatchBlockedReason: lane === 'backlog' ? undefined : moving.dispatchBlockedReason,
+    })
     const withoutMoving = tasks.filter((t) => t.id !== taskId)
     let nextTasks: Task[]
 
@@ -414,8 +786,18 @@ function App() {
       }
     }
 
+    const nextActivity = [{
+      id: `a-${Date.now()}`,
+      title: `${taskId} moved to ${userLaneLabel(lane)}`,
+      detail: lane === 'triaged'
+        ? 'Task is queued for the assistant to pick up.'
+        : 'Task moved back to Ideas.',
+      time: 'just now',
+    }, ...activity]
+
     setTasks(nextTasks)
-    saveBoard(nextTasks, activity)
+    setActivity(nextActivity)
+    void saveBoard(nextTasks, nextActivity)
 
     setDraggingTaskId(null)
     setDragOverLane(null)
@@ -427,7 +809,7 @@ function App() {
     const nextActivity = [{ id: `a-${Date.now()}`, title: `${taskId} deleted`, detail: 'Task removed from board.', time: 'just now' }, ...activity]
     setTasks(nextTasks)
     setActivity(nextActivity)
-    saveBoard(nextTasks, nextActivity)
+    void saveBoard(nextTasks, nextActivity)
     if (selectedTask?.id === taskId) setSelectedTask(null)
   }
 
@@ -445,7 +827,7 @@ function App() {
 
     setTasks(nextTasks)
     setActivity(nextActivity)
-    saveBoard(nextTasks, nextActivity)
+    void saveBoard(nextTasks, nextActivity)
     if (selectedTask?.id === taskId) setSelectedTask(null)
   }
 
@@ -467,15 +849,17 @@ function App() {
 
   async function handleCreateTask(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (!newTaskTitle.trim() || !newTaskObjective.trim()) {
-      setCreateError('Task 名称和任务描述都要填。')
+    if (!newTaskObjective.trim()) {
+      setCreateError('先用一句话告诉我你想完成什么。')
       return
     }
     const maxTaskNumber = tasks.reduce((max, task) => {
       const match = task.id.match(/^MC-(\d+)$/)
       return match ? Math.max(max, Number(match[1])) : max
     }, 0)
-    const acceptanceCriteria = newTaskAcceptance.split('\n').map((line) => line.trim()).filter(Boolean)
+    const acceptanceCriteria = createDraft.acceptanceCriteria.length
+      ? createDraft.acceptanceCriteria
+      : newTaskAcceptance.split('\n').map((line) => line.trim()).filter(Boolean)
 
     let imageAttachments: TaskImageAttachment[] = []
     try {
@@ -490,28 +874,33 @@ function App() {
       return
     }
 
-    const task: Task = {
+    const baseTask: Task = {
       id: `MC-${maxTaskNumber + 1}`,
-      title: newTaskTitle.trim(),
-      objective: newTaskObjective.trim(),
-      targetUrl: newTaskTargetUrl.trim() || undefined,
+      title: createDraft.title || newTaskTitle.trim(),
+      objective: createDraft.objective || newTaskObjective.trim(),
+      targetUrl: createDraft.targetUrl || newTaskTargetUrl.trim() || undefined,
       acceptanceCriteria,
       imageAttachments,
       plan: ['Clarify and structure the task', 'Execute implementation'],
       next: '',
-      tags: ['medium', 'Céline', 'MissionControl'],
+      tags: Array.from(new Set(['medium', 'Céline', ...createDraft.tags])),
       lane: 'backlog',
       createdAt: new Date().toISOString(),
     }
+    const task = normalizeTask(baseTask)
     const nextTasks = [task, ...tasks]
     const nextActivity = [{ id: `a-${Date.now()}`, title: `Task created: ${task.title}`, detail: `Status backlog · ${imageAttachments.length} image(s) attached`, time: 'just now' }, ...activity]
     setTasks(nextTasks)
     setActivity(nextActivity)
-    saveBoard(nextTasks, nextActivity)
-    setNewTaskTitle('')
+    void saveBoard(nextTasks, nextActivity)
     setNewTaskObjective('')
+    setNewTaskTitle('')
     setNewTaskTargetUrl('')
     setNewTaskAcceptance('')
+    setCreateTaskKind('feature')
+    setCreateQaPreference('auto')
+    setCreateUrlMode('infer')
+    setCreateSpecificUrl('')
     setNewTaskImageFiles([])
     if (createImageInputRef.current) createImageInputRef.current.value = ''
     setCreateError('')
@@ -544,19 +933,20 @@ function App() {
   }
 
   async function openTaskDetail(task: Task) {
-    setSelectedTask(task)
+    const normalizedTask = normalizeTask(task)
+    setSelectedTask(normalizedTask)
     setDetailDraft({
-      title: task.title,
-      objective: task.objective,
-      targetUrl: task.targetUrl ?? '',
-      acceptance: (task.acceptanceCriteria ?? []).join('\n'),
+      title: normalizedTask.title,
+      objective: normalizedTask.objective,
+      targetUrl: normalizedTask.targetUrl ?? '',
+      acceptance: (normalizedTask.acceptanceCriteria ?? []).join('\n'),
     })
     setDetailImageFiles([])
     setDetailError('')
     setActiveArtifactUrl('')
     if (detailImageInputRef.current) detailImageInputRef.current.value = ''
-    void loadTaskArtifacts(task.id)
-    if (task.lane !== 'backlog') {
+    void loadTaskArtifacts(normalizedTask.id)
+    if (normalizedTask.lane !== 'backlog') {
       const fetchSessionLog = async (sessionId?: string) => {
         if (!sessionId) return [] as SessionLogMessage[]
         try {
@@ -569,8 +959,8 @@ function App() {
       }
 
       const [coderLog, qaLog] = await Promise.all([
-        fetchSessionLog(task.dispatchSessionKey),
-        fetchSessionLog(task.qaSessionKey),
+        fetchSessionLog(normalizedTask.dispatchSessionKey),
+        fetchSessionLog(normalizedTask.qaSessionKey),
       ])
 
       setCoderSessionLog(coderLog)
@@ -599,7 +989,7 @@ function App() {
       tags: ['archived-from-activity'],
       lane: 'testing',
     }
-    void openTaskDetail(archivedTask)
+    void openTaskDetail(normalizeTask(archivedTask))
   }
 
   async function saveBacklogDetail() {
@@ -620,20 +1010,66 @@ function App() {
       }
     }
 
-    const nextTasks = tasks.map((t) => t.id === selectedTask.id ? {
+    const nextTasks = tasks.map((t) => t.id === selectedTask.id ? normalizeTask({
       ...t,
       title: detailDraft.title.trim(),
       objective: detailDraft.objective.trim(),
       targetUrl: detailDraft.targetUrl.trim() || undefined,
       acceptanceCriteria: detailDraft.acceptance.split('\n').map((line) => line.trim()).filter(Boolean),
       imageAttachments: [...(t.imageAttachments ?? []), ...appendedAttachments],
-    } : t)
+    }) : t)
     setTasks(nextTasks)
-    saveBoard(nextTasks, activity)
+    void saveBoard(nextTasks, activity)
     setDetailImageFiles([])
     setDetailError('')
     if (detailImageInputRef.current) detailImageInputRef.current.value = ''
     closeTaskDetail()
+  }
+
+  function updateTaskInBoard(taskId: string, updater: (task: Task) => Task, activityEntry?: Activity) {
+    const nextTasks = tasks.map((task) => task.id === taskId ? normalizeTask(updater(task)) : task)
+    const nextActivity = activityEntry ? [activityEntry, ...activity] : activity
+    setTasks(nextTasks)
+    if (activityEntry) setActivity(nextActivity)
+    void saveBoard(nextTasks, nextActivity)
+    const updatedSelected = nextTasks.find((task) => task.id === taskId) ?? null
+    setSelectedTask(updatedSelected)
+  }
+
+  function answerClarificationQuestion(taskId: string, questionId: string, answer: string) {
+    updateTaskInBoard(taskId, (task) => {
+      const clarificationQuestions = (task.clarificationQuestions ?? []).map((question) => (
+        question.id === questionId
+          ? { ...question, answer, status: answer.trim() ? 'answered' as const : 'pending' as const }
+          : question
+      ))
+      const nextTask = normalizeTask({ ...task, clarificationQuestions })
+      if (!taskNeedsClarification(nextTask)) {
+        nextTask.planItems = (nextTask.planItems ?? []).map((item) => item.kind === 'clarify'
+          ? { ...item, status: 'done', details: 'Required user answers are recorded.', updatedAt: new Date().toISOString() }
+          : item)
+      }
+      return nextTask
+    }, {
+      id: `a-${Date.now()}`,
+      title: `${taskId} clarification updated`,
+      detail: `Question ${questionId} answered: ${answer || 'cleared'}.`,
+      time: 'just now',
+    })
+  }
+
+  function abortPlanItem(taskId: string, itemId: string) {
+    updateTaskInBoard(taskId, (task) => ({
+      ...task,
+      planItems: (task.planItems ?? []).map((item) => item.id === itemId
+        ? { ...item, status: 'aborted', details: 'Stopped manually from Mission Control.', updatedAt: new Date().toISOString() }
+        : item),
+    }), {
+      id: `a-${Date.now()}`,
+      title: `${taskId} plan item stopped`,
+      detail: `Stopped plan item ${itemId} from the board.`,
+      time: 'just now',
+    })
   }
 
   return (
@@ -764,22 +1200,72 @@ function App() {
               </section>
             </section>
           </>
+        ) : activeNav === 'Settings' ? (
+          <>
+            <header className="panel top-header">
+              <div><h2>Settings</h2><p>Connect Mission Control to the places where you want updates to land</p></div>
+              <div className="header-actions">
+                <button className="ghost" onClick={() => { void loadSettings() }}>Refresh</button>
+                <button className="primary" onClick={() => { void saveSettings() }} disabled={settingsSaving}>{settingsSaving ? 'Saving…' : 'Save Settings'}</button>
+              </div>
+            </header>
+
+            <section className="panel settings-layout">
+              <div className="settings-card">
+                <div className="settings-card-head">
+                  <div>
+                    <h3>Discord Webhook</h3>
+                    <p>Paste a webhook URL here and Mission Control will write it into <code>.env</code> and use it right away.</p>
+                  </div>
+                  <span className="task-state-pill">{settings.webhookUrl ? 'Connected' : 'Not connected'}</span>
+                </div>
+
+                <label className="settings-field">
+                  <span>Webhook URL</span>
+                  <input
+                    value={settingsDraft}
+                    onChange={(e) => setSettingsDraft(e.target.value)}
+                    placeholder="https://discord.com/api/webhooks/..."
+                    spellCheck={false}
+                  />
+                </label>
+
+                <div className="settings-meta-row">
+                  <div className="settings-meta">
+                    <strong>Current source</strong>
+                    <p>{settings.source}</p>
+                  </div>
+                  <div className="settings-meta">
+                    <strong>Status</strong>
+                    <p>{settingsLoading ? 'Loading…' : settings.webhookUrl ? 'Discord notifications are ready.' : 'No webhook saved yet.'}</p>
+                  </div>
+                </div>
+
+                {settingsError ? <p className="create-error">{settingsError}</p> : null}
+                {settingsOk ? <p className="muted">{settingsOk}</p> : null}
+
+                <div className="modal-actions">
+                  <button className="primary" onClick={() => { void saveSettings() }} disabled={settingsSaving}>{settingsSaving ? 'Saving…' : 'Save Discord Webhook'}</button>
+                </div>
+              </div>
+            </section>
+          </>
         ) : (
           <>
             <header className="panel top-header">
-              <div><h2>Tasks</h2><p>Organize work and track progress</p></div>
+              <div><h2>Mission Board</h2><p>Tell the assistant what you want, then follow progress in plain language</p></div>
               <div className="header-actions">
-                <span className="chip">⏱ Next triage pickup in {countdownSeconds}s</span>
+                <span className="chip">⏱ Assistant checks for the next task in {countdownSeconds}s</span>
                 <button className="ghost" onClick={loadBoardFromServer}>Refresh</button>
                 <button className="primary" onClick={() => setShowCreateModal(true)}>+ New Task</button>
               </div>
             </header>
 
             <section className="panel stats-row">
-              <Stat value="0" label="This week" color="green" />
-              <Stat value={String(inProgressCount)} label="In progress" color="blue" />
-              <Stat value={String(tasks.length)} label="Total" color="white" />
-              <Stat value={`${completion}%`} label="Completion" color="purple" />
+              <Stat value="0" label="Touched this week" color="green" />
+              <Stat value={String(inProgressCount)} label="Assistant working" color="blue" />
+              <Stat value={String(tasks.length)} label="Open tasks" color="white" />
+              <Stat value={`${completion}%`} label="Waiting for your review" color="purple" />
             </section>
 
             <section className="board-wrap">
@@ -805,7 +1291,7 @@ function App() {
                         </div>
                         <div
                           className={`lane-body ${laneAllowsDrop ? '' : 'lane-body-locked'}`}
-                          data-empty-text={lane.key === 'triaged' ? 'Drop tasks here' : undefined}
+                          data-empty-text={lane.key === 'triaged' ? 'Drop here when you want the assistant to start' : undefined}
                           onDrop={(e) => {
                             if (!laneAllowsDrop) return
                             e.preventDefault()
@@ -850,11 +1336,26 @@ function App() {
                                 <button className="delete-x" onClick={(e) => { e.stopPropagation(); deleteTask(task.id) }}>×</button>
                               </div>
                               <h3>{task.title}</h3>
+                              <div className="task-state-pill">{userFacingTaskState(task)}</div>
+                              {!!task.planItems?.length && (
+                                <div className="meta-block">
+                                  <span>Plan</span>
+                                  <p>{task.planItems.map((item) => `${statusGlyph(item.status)} ${item.title}`).join('\n')}</p>
+                                </div>
+                              )}
+                              {!!task.dispatchBlockedReason && (
+                                <div className="meta-block warning-block">
+                                  <span>Blocked</span>
+                                  <p>Waiting for a quick answer from you before the assistant starts.</p>
+                                </div>
+                              )}
                               <div className="meta-block"><span>Objective</span><p>{task.objective}</p></div>
                               {task.targetUrl && <div className="meta-block"><span>Target URL</span><p>{task.targetUrl}</p></div>}
-                              <div className="meta-block"><span>Acceptance</span><p>{task.acceptanceCriteria?.length ? task.acceptanceCriteria.join('\n') : 'No explicit acceptance criteria provided.'}</p></div>
+                              <div className="meta-block"><span>Success looks like</span><p>{task.acceptanceCriteria?.length ? task.acceptanceCriteria.join('\n') : 'No explicit acceptance criteria provided.'}</p></div>
                               {!!task.imageAttachments?.length && <div className="meta-block"><span>Images</span><p>{task.imageAttachments.length} attached</p></div>}
-                              {task.dispatchSessionKey && <div className="meta-block"><span>Session</span><p>{task.dispatchSessionKey}</p></div>}
+                              {!!task.clarificationQuestions?.length && <div className="meta-block"><span>Questions</span><p>{task.clarificationQuestions.filter((question) => !question.answer?.trim()).length} waiting for you</p></div>}
+                              {task.verification?.status && <div className="meta-block"><span>Check result</span><p>{userFacingVerificationStatus(task)}{task.verification.summary ? ` · ${task.verification.summary}` : ''}</p></div>}
+                              {task.dispatchSessionKey && <div className="meta-block"><span>Work session</span><p>{task.dispatchSessionKey}</p></div>}
                               <div className="tag-row">{task.tags.map((tag) => <span className="tag" key={tag}>{tag}</span>)}</div>
                             </article>
                           ))}
@@ -867,10 +1368,10 @@ function App() {
 
               <aside className="panel activity-panel" data-testid="activity-panel">
                 <div className="activity-header">
-                  <h3>ACTIVITY</h3>
+                  <h3>Recent Updates</h3>
                   <span className="activity-count">{activity.length}</span>
                 </div>
-                <div className="running-box"><span>NOW RUNNING</span><p>{grouped.in_progress[0]?.title ?? 'Idle'}</p></div>
+                <div className="running-box"><span>ASSISTANT IS DOING</span><p>{grouped.in_progress[0]?.title ?? 'Nothing right now'}</p></div>
                 <div className="activity-list">
                   {activity.length === 0 && <p className="activity-empty">No activity yet.</p>}
                   {activity.map((item) => {
@@ -937,10 +1438,104 @@ function App() {
           <div className="modal-card" onClick={(e) => e.stopPropagation()} onDrop={markModalDragEvent} onDragEnd={markModalDragEvent}>
             <div className="modal-header"><h3>Create New Task</h3><button className="ghost" onClick={() => setShowCreateModal(false)}>Close</button></div>
             <form className="modal-form" onSubmit={handleCreateTask}>
-              <label><span>Task 名称</span><input value={newTaskTitle} onChange={(e) => setNewTaskTitle(e.target.value)} /></label>
-              <label><span>任务描述</span><textarea rows={5} value={newTaskObjective} onChange={(e) => setNewTaskObjective(e.target.value)} /></label>
-              <label><span>目标网址（可选）</span><input value={newTaskTargetUrl} onChange={(e) => setNewTaskTargetUrl(e.target.value)} placeholder="https://... 或 http://127.0.0.1:5173" /></label>
-              <label><span>验收标准（可选，每行一条）</span><textarea rows={3} value={newTaskAcceptance} onChange={(e) => setNewTaskAcceptance(e.target.value)} /></label>
+              <section className="create-flow">
+                <div className="create-step">
+                  <span className="create-step-label">1. 你想让我做什么？</span>
+                  <textarea
+                    rows={4}
+                    value={newTaskObjective}
+                    onChange={(e) => setNewTaskObjective(e.target.value)}
+                    placeholder="比如：把首页 hero 区改得更高级，并且帮我自己去浏览器里检查一遍。"
+                  />
+                </div>
+
+                <div className="create-step">
+                  <span className="create-step-label">2. 这更像哪种任务？</span>
+                  <div className="choice-row">
+                    {[
+                      ['design', '改设计'],
+                      ['bugfix', '修问题'],
+                      ['feature', '做功能'],
+                      ['docs', '写文档'],
+                    ].map(([value, label]) => (
+                      <button
+                        key={value}
+                        type="button"
+                        className={`ghost choice-chip ${createTaskKind === value ? 'selected' : ''}`}
+                        onClick={() => setCreateTaskKind(value as CreateTaskKind)}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="create-step">
+                  <span className="create-step-label">3. 要不要默认帮你做浏览器检查？</span>
+                  <div className="choice-row">
+                    {[
+                      ['auto', '自动判断'],
+                      ['browser', '要，默认去检查'],
+                      ['skip', '不用，先专注实现'],
+                    ].map(([value, label]) => (
+                      <button
+                        key={value}
+                        type="button"
+                        className={`ghost choice-chip ${createQaPreference === value ? 'selected' : ''}`}
+                        onClick={() => setCreateQaPreference(value as CreateQaPreference)}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="create-step">
+                  <span className="create-step-label">4. 浏览器应该从哪里开始？</span>
+                  <div className="choice-row">
+                    {[
+                      ['infer', '让系统判断'],
+                      ['home', '从本地首页开始'],
+                      ['specific', '我给具体页面'],
+                      ['none', '这次没有页面'],
+                    ].map(([value, label]) => (
+                      <button
+                        key={value}
+                        type="button"
+                        className={`ghost choice-chip ${createUrlMode === value ? 'selected' : ''}`}
+                        onClick={() => setCreateUrlMode(value as CreateUrlMode)}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  {createUrlMode === 'specific' && (
+                    <input
+                      value={createSpecificUrl}
+                      onChange={(e) => setCreateSpecificUrl(e.target.value)}
+                      placeholder="https://... 或 http://127.0.0.1:5173/path"
+                    />
+                  )}
+                </div>
+
+                <div className="create-preview">
+                  <p className="create-preview-eyebrow">System Draft</p>
+                  <h4>{createDraft.title || '任务标题会在这里自动生成'}</h4>
+                  <p>{createDraft.objective || '先告诉我你想完成什么，我会自动整理任务说明。'}</p>
+                  <div className="create-preview-grid">
+                    <div>
+                      <strong>Acceptance</strong>
+                      <ul>
+                        {createDraft.acceptanceCriteria.map((line) => <li key={line}>{line}</li>)}
+                      </ul>
+                    </div>
+                    <div>
+                      <strong>Browser Start</strong>
+                      <p>{createDraft.targetUrl ?? (createUrlMode === 'infer' ? 'Infer from project' : createUrlMode === 'none' ? 'No page required' : 'Local homepage')}</p>
+                    </div>
+                  </div>
+                </div>
+              </section>
               <label>
                 <span>参考图片（可选，可多选）</span>
                 <input
@@ -1007,6 +1602,49 @@ function App() {
                   {!!detailImageFiles.length && <small className="image-count">本次将新增 {detailImageFiles.length} 张图片</small>}
                 </label>
                 <ReferenceImageGallery images={selectedTask.imageAttachments} />
+                <section className="detail-inline-section">
+                  <h4>Clarification Gate</h4>
+                  <div className="question-list">
+                    {(selectedTask.clarificationQuestions ?? []).map((question) => (
+                      <div key={question.id} className="question-card">
+                        <div className="question-head">
+                          <strong>{question.header}</strong>
+                          <span>{question.required ? 'Required' : 'Optional'}</span>
+                        </div>
+                        <p>{question.question}</p>
+                        <div className="question-options">
+                          {question.options.map((option) => (
+                            <button
+                              key={option.label}
+                              type="button"
+                              className={`ghost option-chip ${question.answer === option.label ? 'selected' : ''}`}
+                              onClick={() => answerClarificationQuestion(selectedTask.id, question.id, option.label)}
+                            >
+                              {option.label}
+                            </button>
+                          ))}
+                        </div>
+                        <small>{question.answer ? `Selected: ${question.answer}` : 'No answer yet'}</small>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+                <section className="detail-inline-section">
+                  <h4>Execution Plan</h4>
+                  <div className="plan-list">
+                    {(selectedTask.planItems ?? []).map((item) => (
+                      <div key={item.id} className={`plan-item status-${item.status}`}>
+                        <div className="plan-item-main">
+                          <span className="plan-status">{statusGlyph(item.status)}</span>
+                          <div>
+                            <strong>{item.title}</strong>
+                            {item.details ? <p>{item.details}</p> : null}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </section>
                 {detailError && <p className="create-error">{detailError}</p>}
                 <div className="modal-actions"><button className="primary" onClick={() => { void saveBacklogDetail() }}>Save</button></div>
               </div>
@@ -1015,10 +1653,76 @@ function App() {
                 <section className="detail-section detail-summary">
                   <p><strong>Title:</strong> {selectedTask.title}</p>
                   <p><strong>Objective:</strong> {selectedTask.objective}</p>
-                  <p><strong>Status:</strong> {selectedTask.lane}</p>
-                  <p><strong>Target URL:</strong> {selectedTask.targetUrl ?? '—'}</p>
-                  <p><strong>Images:</strong> {selectedTask.imageAttachments?.length ? `${selectedTask.imageAttachments.length} attached` : '—'}</p>
-                  <p><strong>Session:</strong> {selectedTask.dispatchSessionKey ?? '—'}</p>
+                  <p><strong>What stage is it in?</strong> {userFacingTaskState(selectedTask)} ({userLaneLabel(selectedTask.lane)})</p>
+                  <p><strong>Target page:</strong> {selectedTask.targetUrl ?? 'None specified yet'}</p>
+                  <p><strong>Reference images:</strong> {selectedTask.imageAttachments?.length ? `${selectedTask.imageAttachments.length} attached` : 'None yet'}</p>
+                  <p><strong>Work session:</strong> {selectedTask.dispatchSessionKey ?? 'Not started yet'}</p>
+                  <p><strong>Harness:</strong> Browser [{(selectedTask.harnessCapabilities?.browser ?? []).join(', ')}] · QA [{(selectedTask.harnessCapabilities?.qa ?? []).join(', ')}]</p>
+                </section>
+
+                <section className="detail-section detail-plan">
+                  <h4>Execution Plan</h4>
+                  <div className="plan-list">
+                    {(selectedTask.planItems ?? []).map((item) => (
+                      <div key={item.id} className={`plan-item status-${item.status}`}>
+                        <div className="plan-item-main">
+                          <span className="plan-status">{statusGlyph(item.status)}</span>
+                          <div>
+                            <strong>{item.title}</strong>
+                            {item.details ? <p>{item.details}</p> : null}
+                          </div>
+                        </div>
+                        {item.userAbortable && item.status === 'running' ? (
+                          <button className="ghost compact-btn" onClick={() => abortPlanItem(selectedTask.id, item.id)}>Stop</button>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+                </section>
+
+                <section className="detail-section detail-clarification">
+                  <h4>Clarification Gate</h4>
+                  <div className="question-list">
+                    {(selectedTask.clarificationQuestions ?? []).map((question) => (
+                      <div key={question.id} className="question-card">
+                        <div className="question-head">
+                          <strong>{question.header}</strong>
+                          <span>{question.required ? 'Needed before work starts' : 'Optional'}</span>
+                        </div>
+                        <p>{question.question}</p>
+                        <div className="question-options">
+                          {question.options.map((option) => (
+                            <button
+                              key={option.label}
+                              type="button"
+                              className={`ghost option-chip ${question.answer === option.label ? 'selected' : ''}`}
+                              onClick={() => answerClarificationQuestion(selectedTask.id, question.id, option.label)}
+                            >
+                              {option.label}
+                            </button>
+                          ))}
+                        </div>
+                        <small>{question.answer ? `You chose: ${question.answer}` : 'Still waiting for your answer'}</small>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+
+                <section className="detail-section detail-verification">
+                  <h4>Verification Harness</h4>
+                  <p className="muted">
+                    Status: {userFacingVerificationStatus(selectedTask)}
+                    {selectedTask.verification?.summary ? ` · ${selectedTask.verification.summary}` : ''}
+                  </p>
+                  <div className="verification-list">
+                    {(selectedTask.verification?.checks ?? []).map((check) => (
+                      <div key={check.id} className={`verification-item verification-${check.status}`}>
+                        <strong>{check.label}</strong>
+                        <span>{check.status}</span>
+                        {check.detail ? <p>{check.detail}</p> : null}
+                      </div>
+                    ))}
+                  </div>
                 </section>
 
                 <section className="detail-section detail-screenshots">

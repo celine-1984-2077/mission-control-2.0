@@ -2,6 +2,7 @@ import http from 'node:http'
 import fs from 'node:fs'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
+import { spawnSync } from 'node:child_process'
 
 const PORT = Number(process.env.BOARD_BRIDGE_PORT || 8787)
 const DISPATCH_INTERVAL_MS = Number(process.env.BOARD_DISPATCH_INTERVAL_MS || 10_000)
@@ -17,11 +18,18 @@ const RUN_LOGS_DIR = path.resolve(MISSION_CONTROL_ROOT, 'automation/run-logs')
 const TASK_ATTACHMENTS_DIR = path.resolve(MISSION_CONTROL_ROOT, 'automation/task-attachments')
 const DOC_STORE_ROOT = path.resolve(WORKSPACE_ROOT, '.mc-docs')
 const DOC_STORE_INDEX_PATH = path.join(DOC_STORE_ROOT, 'index.json')
+const PACKAGE_JSON_PATH = path.resolve(MISSION_CONTROL_ROOT, 'package.json')
+const ENV_PATH = path.resolve(MISSION_CONTROL_ROOT, '.env')
 
 const OPENCLAW_HOME = process.env.OPENCLAW_HOME || path.resolve(process.env.HOME ?? '', '.openclaw')
 const SESSION_STORE_DIR = process.env.BOARD_SESSION_STORE_DIR || path.resolve(OPENCLAW_HOME, 'agents/main/sessions')
 
 let nextPickupAtMs = Date.now() + DISPATCH_INTERVAL_MS
+const DEFAULT_HARNESS_CAPABILITIES = {
+  browser: ['playwright', 'session-log-screenshots'],
+  qa: ['structured-verdict', 'evidence-images', 'discord-webhook'],
+  design: ['reference-images', 'project-docs'],
+}
 
 function nowIso() {
   return new Date().toISOString()
@@ -98,6 +106,7 @@ function readState() {
   const parsed = JSON.parse(fs.readFileSync(STATE_PATH, 'utf8'))
   if (!Array.isArray(parsed.tasks)) parsed.tasks = []
   if (!Array.isArray(parsed.activity)) parsed.activity = []
+  parsed.tasks = parsed.tasks.map((task) => normalizeTask(task))
   return parsed
 }
 
@@ -105,7 +114,7 @@ function writeState(next) {
   ensureStateFile()
   const payload = {
     ...next,
-    tasks: Array.isArray(next?.tasks) ? next.tasks : [],
+    tasks: Array.isArray(next?.tasks) ? next.tasks.map((task) => normalizeTask(task)) : [],
     activity: Array.isArray(next?.activity) ? next.activity : [],
     updatedAt: nowIso(),
   }
@@ -126,6 +135,314 @@ function buildAcceptanceList(task) {
   const items = Array.isArray(task?.acceptanceCriteria) ? task.acceptanceCriteria.filter(Boolean) : []
   if (!items.length) return 'No explicit acceptance criteria provided.'
   return items.map((line, idx) => `${idx + 1}. ${line}`).join('\n')
+}
+
+function slugPart(value, fallback = 'item') {
+  const normalized = String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+  return normalized || fallback
+}
+
+function allRequiredQuestionsAnswered(task) {
+  const questions = Array.isArray(task?.clarificationQuestions) ? task.clarificationQuestions : []
+  return questions.every((question) => !question?.required || (typeof question.answer === 'string' && question.answer.trim()))
+}
+
+function createPlanItem(title, status = 'pending', extra = {}) {
+  return {
+    id: `plan-${slugPart(title)}-${Math.random().toString(36).slice(2, 7)}`,
+    title,
+    status,
+    ...extra,
+  }
+}
+
+function buildDefaultPlanItems(task) {
+  const clarificationStatus = allRequiredQuestionsAnswered(task) ? 'done' : 'pending'
+  return [
+    createPlanItem('Clarify the task with the user', clarificationStatus, { kind: 'clarify' }),
+    createPlanItem('Implement the requested work', 'pending', { kind: 'implement' }),
+    createPlanItem('Run verification and browser QA', 'pending', { kind: 'verify' }),
+  ]
+}
+
+function buildDefaultClarificationQuestions(task) {
+  const questions = [
+    {
+      id: 'definition-of-done',
+      header: 'Outcome',
+      question: 'What should feel obviously successful when this task is done?',
+      required: false,
+      options: [
+        { label: 'Visible UI', description: 'A user-facing screen or interaction should clearly change.' },
+        { label: 'Behavior fix', description: 'An existing bug or broken flow should work reliably.' },
+        { label: 'Automation', description: 'The system should run something for me automatically.' },
+      ],
+      answer: '',
+      notes: '',
+      status: 'pending',
+    },
+  ]
+
+  if (isLikelyWebsiteTask(task) && !(task?.targetUrl && String(task.targetUrl).trim())) {
+    questions.push({
+      id: 'target-url',
+      header: 'Target URL',
+      question: 'Which page should browser QA open first?',
+      required: true,
+      options: [
+        { label: 'Local app', description: 'Use the default local app URL from this workspace.' },
+        { label: 'Specific URL', description: 'I will paste the exact URL in notes or task details.' },
+        { label: 'Infer it', description: 'Infer the best local URL from the project setup.' },
+      ],
+      answer: '',
+      notes: '',
+      status: 'pending',
+    })
+  }
+
+  questions.push({
+    id: 'risk-focus',
+    header: 'Focus',
+    question: 'Where should verification be strictest?',
+    required: false,
+    options: [
+      { label: 'Happy path', description: 'Prioritize the main user flow and expected behavior.' },
+      { label: 'Edge cases', description: 'Stress broken states, retries, and unusual inputs.' },
+      { label: 'Visual polish', description: 'Pay extra attention to design and browser details.' },
+    ],
+    answer: '',
+    notes: '',
+    status: 'pending',
+  })
+
+  return questions
+}
+
+function normalizePlanItems(task) {
+  if (Array.isArray(task?.planItems) && task.planItems.length) {
+    return task.planItems.map((item, index) => ({
+      id: typeof item?.id === 'string' && item.id.trim() ? item.id : `plan-${index + 1}`,
+      title: typeof item?.title === 'string' && item.title.trim() ? item.title.trim() : `Step ${index + 1}`,
+      status: ['pending', 'running', 'done', 'failed', 'aborted'].includes(item?.status) ? item.status : 'pending',
+      details: typeof item?.details === 'string' ? item.details : '',
+      kind: typeof item?.kind === 'string' ? item.kind : '',
+      updatedAt: typeof item?.updatedAt === 'string' ? item.updatedAt : undefined,
+      sessionId: typeof item?.sessionId === 'string' ? item.sessionId : undefined,
+      userAbortable: Boolean(item?.userAbortable),
+    }))
+  }
+
+  if (Array.isArray(task?.plan) && task.plan.length) {
+    return task.plan.map((title, index) => ({
+      id: `legacy-plan-${index + 1}`,
+      title: String(title || '').trim() || `Step ${index + 1}`,
+      status: 'pending',
+      details: '',
+      kind: '',
+      userAbortable: false,
+    }))
+  }
+
+  return buildDefaultPlanItems(task)
+}
+
+function normalizeClarificationQuestions(task) {
+  const questions = Array.isArray(task?.clarificationQuestions) && task.clarificationQuestions.length
+    ? task.clarificationQuestions
+    : buildDefaultClarificationQuestions(task)
+
+  return questions.map((question, index) => ({
+    id: typeof question?.id === 'string' && question.id.trim() ? question.id : `question-${index + 1}`,
+    header: typeof question?.header === 'string' && question.header.trim() ? question.header.trim() : `Question ${index + 1}`,
+    question: typeof question?.question === 'string' && question.question.trim() ? question.question.trim() : `Question ${index + 1}`,
+    required: question?.required !== false,
+    options: Array.isArray(question?.options) ? question.options.map((option) => ({
+      label: typeof option?.label === 'string' && option.label.trim() ? option.label.trim() : 'Option',
+      description: typeof option?.description === 'string' ? option.description.trim() : '',
+    })) : [],
+    answer: typeof question?.answer === 'string' ? question.answer : '',
+    notes: typeof question?.notes === 'string' ? question.notes : '',
+    status: typeof question?.answer === 'string' && question.answer.trim() ? 'answered' : 'pending',
+  }))
+}
+
+function buildVerificationChecks(likelyWebsite) {
+  const checks = [
+    { id: 'build', label: 'Build or type-check the project', status: 'pending', detail: '' },
+    { id: 'tests', label: 'Run automated tests where available', status: 'pending', detail: '' },
+    { id: 'regression', label: 'Probe likely regressions and edge cases', status: 'pending', detail: '' },
+  ]
+
+  if (likelyWebsite) {
+    checks.splice(2, 0, { id: 'browser', label: 'Exercise the UI in a browser and capture evidence', status: 'pending', detail: '' })
+  }
+
+  return checks
+}
+
+function normalizeVerification(task) {
+  const likelyWebsite = isLikelyWebsiteTask(task)
+  const checks = Array.isArray(task?.verification?.checks) && task.verification.checks.length
+    ? task.verification.checks.map((check, index) => ({
+      id: typeof check?.id === 'string' && check.id.trim() ? check.id : `check-${index + 1}`,
+      label: typeof check?.label === 'string' && check.label.trim() ? check.label.trim() : `Check ${index + 1}`,
+      status: ['pending', 'running', 'passed', 'failed', 'skipped'].includes(check?.status) ? check.status : 'pending',
+      detail: typeof check?.detail === 'string' ? check.detail : '',
+    }))
+    : buildVerificationChecks(likelyWebsite)
+
+  return {
+    status: ['pending', 'running', 'passed', 'failed'].includes(task?.verification?.status) ? task.verification.status : 'pending',
+    verdict: ['pass', 'fail', 'partial'].includes(task?.verification?.verdict) ? task.verification.verdict : undefined,
+    summary: typeof task?.verification?.summary === 'string' ? task.verification.summary : '',
+    evidence: Array.isArray(task?.verification?.evidence) ? task.verification.evidence.filter((x) => typeof x === 'string') : [],
+    reproSteps: Array.isArray(task?.verification?.reproSteps) ? task.verification.reproSteps.filter((x) => typeof x === 'string') : [],
+    checks,
+  }
+}
+
+function readPackageScripts() {
+  try {
+    if (!fs.existsSync(PACKAGE_JSON_PATH)) return {}
+    const parsed = JSON.parse(fs.readFileSync(PACKAGE_JSON_PATH, 'utf8'))
+    return parsed?.scripts && typeof parsed.scripts === 'object' ? parsed.scripts : {}
+  } catch {
+    return {}
+  }
+}
+
+function summarizeCommandOutput(text, fallback) {
+  const trimmed = String(text || '').trim()
+  if (!trimmed) return fallback
+  const lines = trimmed.split('\n').slice(-8)
+  return lines.join('\n')
+}
+
+function runVerificationCommand(label, command, args) {
+  const result = spawnSync(command, args, {
+    cwd: MISSION_CONTROL_ROOT,
+    encoding: 'utf8',
+    timeout: 120_000,
+    env: {
+      ...process.env,
+      CI: '1',
+      FORCE_COLOR: '0',
+    },
+  })
+
+  if (result.error) {
+    return {
+      id: label,
+      label,
+      status: 'failed',
+      detail: `Failed to run ${command} ${args.join(' ')}: ${result.error.message}`,
+      command: `${command} ${args.join(' ')}`,
+    }
+  }
+
+  const combined = [result.stdout, result.stderr].filter(Boolean).join('\n')
+  return {
+    id: label,
+    label,
+    status: result.status === 0 ? 'passed' : 'failed',
+    detail: summarizeCommandOutput(
+      combined,
+      result.status === 0 ? `${command} ${args.join(' ')} passed.` : `${command} ${args.join(' ')} failed with exit code ${result.status}.`,
+    ),
+    command: `${command} ${args.join(' ')}`,
+  }
+}
+
+function runVerificationPreflight(task) {
+  const scripts = readPackageScripts()
+  const checks = []
+
+  if (scripts.build) checks.push(runVerificationCommand('build', 'npm', ['run', 'build']))
+  else checks.push({ id: 'build', label: 'Build or type-check the project', status: 'skipped', detail: 'No package.json build script found.', command: '' })
+
+  if (scripts.test) checks.push(runVerificationCommand('tests', 'npm', ['test']))
+  else checks.push({ id: 'tests', label: 'Run automated tests where available', status: 'skipped', detail: 'No package.json test script found.', command: '' })
+
+  if (scripts.lint) checks.push(runVerificationCommand('lint', 'npm', ['run', 'lint']))
+  else checks.push({ id: 'lint', label: 'Run lint checks', status: 'skipped', detail: 'No package.json lint script found.', command: '' })
+
+  if (isLikelyWebsiteTask(task)) {
+    checks.push({
+      id: 'browser',
+      label: 'Exercise the UI in a browser and capture evidence',
+      status: 'pending',
+      detail: 'Browser harness execution will be handled by the QA agent.',
+      command: '',
+    })
+  }
+
+  checks.push({
+    id: 'regression',
+    label: 'Probe regressions and edge cases',
+    status: 'pending',
+    detail: 'Adversarial probe is delegated to the QA agent.',
+    command: '',
+  })
+
+  const failed = checks.some((check) => check.status === 'failed')
+  return {
+    status: failed ? 'failed' : 'running',
+    checks,
+    summary: failed
+      ? 'One or more automated verification commands failed before QA.'
+      : 'Automated verification commands completed. Waiting for QA/browser validation.',
+  }
+}
+
+function normalizeTask(task) {
+  const draft = { ...(task ?? {}) }
+  draft.harnessCapabilities = {
+    browser: Array.isArray(draft?.harnessCapabilities?.browser) ? draft.harnessCapabilities.browser : [...DEFAULT_HARNESS_CAPABILITIES.browser],
+    qa: Array.isArray(draft?.harnessCapabilities?.qa) ? draft.harnessCapabilities.qa : [...DEFAULT_HARNESS_CAPABILITIES.qa],
+    design: Array.isArray(draft?.harnessCapabilities?.design) ? draft.harnessCapabilities.design : [...DEFAULT_HARNESS_CAPABILITIES.design],
+  }
+  draft.clarificationQuestions = normalizeClarificationQuestions(draft)
+  draft.planItems = normalizePlanItems(draft)
+  draft.verification = normalizeVerification(draft)
+  if (!Array.isArray(draft.tags)) draft.tags = []
+  if (!Array.isArray(draft.acceptanceCriteria)) draft.acceptanceCriteria = []
+  if (!draft.plan && Array.isArray(draft.planItems)) {
+    draft.plan = draft.planItems.map((item) => item.title)
+  }
+  return draft
+}
+
+function updatePlanItemStatus(task, kind, status, details = '', extra = {}) {
+  const items = Array.isArray(task?.planItems) && task.planItems.length ? task.planItems : buildDefaultPlanItems(task)
+  let updated = false
+  task.planItems = items.map((item) => {
+    const itemKind = item?.kind || ''
+    if (itemKind !== kind) return item
+    updated = true
+    return {
+      ...item,
+      status,
+      details: details || item.details || '',
+      updatedAt: nowIso(),
+      ...extra,
+    }
+  })
+
+  if (!updated) {
+    task.planItems = [
+      ...task.planItems,
+      createPlanItem(kind, status, {
+        kind,
+        details,
+        updatedAt: nowIso(),
+        ...extra,
+      }),
+    ]
+  }
 }
 
 function decodeDataUrl(dataUrl) {
@@ -181,6 +498,68 @@ function getWebhookUrl() {
     if (raw) return raw
   }
   return ''
+}
+
+function readEnvFile() {
+  try {
+    return fs.existsSync(ENV_PATH) ? fs.readFileSync(ENV_PATH, 'utf8') : ''
+  } catch {
+    return ''
+  }
+}
+
+function getWebhookConfig() {
+  const envText = readEnvFile()
+  const envMatch = envText.match(/^DISCORD_WEBHOOK_URL=(.*)$/m)
+  const envValue = envMatch?.[1]?.trim() || ''
+  const fileValue = fs.existsSync(WEBHOOK_PATH) ? fs.readFileSync(WEBHOOK_PATH, 'utf8').trim() : ''
+  return {
+    webhookUrl: envValue || fileValue || '',
+    source: envValue ? '.env' : fileValue ? 'automation/discord-webhook.txt' : 'unset',
+  }
+}
+
+function saveWebhookConfig(webhookUrl) {
+  const value = String(webhookUrl || '').trim()
+
+  let envText = readEnvFile()
+  if (!envText && !fs.existsSync(ENV_PATH)) {
+    envText = ''
+  }
+
+  if (/^DISCORD_WEBHOOK_URL=/m.test(envText)) {
+    envText = envText.replace(/^DISCORD_WEBHOOK_URL=.*$/m, `DISCORD_WEBHOOK_URL=${value}`)
+  } else {
+    envText = `${envText}${envText && !envText.endsWith('\n') ? '\n' : ''}DISCORD_WEBHOOK_URL=${value}\n`
+  }
+  fs.writeFileSync(ENV_PATH, envText, 'utf8')
+
+  fs.mkdirSync(path.dirname(WEBHOOK_PATH), { recursive: true })
+  fs.writeFileSync(WEBHOOK_PATH, value, 'utf8')
+  process.env.DISCORD_WEBHOOK_URL = value
+
+  return getWebhookConfig()
+}
+
+function parseJsonBody(req, maxBytes = 1_000_000) {
+  return new Promise((resolve, reject) => {
+    let body = ''
+    req.on('data', (chunk) => {
+      body += chunk
+      if (body.length > maxBytes) {
+        req.destroy()
+        reject(new Error('Request body too large'))
+      }
+    })
+    req.on('end', () => {
+      try {
+        resolve(JSON.parse(body || '{}'))
+      } catch (error) {
+        reject(error)
+      }
+    })
+    req.on('error', reject)
+  })
 }
 
 function collectPlaywrightImagesForTask(task, maxImages = 4) {
@@ -340,17 +719,21 @@ async function postWebhook(content, options = {}) {
   if (!webhookUrl) return
 
   const filePaths = Array.isArray(options.files) ? options.files.filter((x) => typeof x === 'string' && x.trim()) : []
+  const payload = {
+    content,
+    ...(Array.isArray(options.embeds) && options.embeds.length ? { embeds: options.embeds } : {}),
+  }
   if (!filePaths.length) {
     await fetch(webhookUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content }),
+      body: JSON.stringify(payload),
     }).catch(() => undefined)
     return
   }
 
   const form = new FormData()
-  form.set('payload_json', JSON.stringify({ content }))
+  form.set('payload_json', JSON.stringify(payload))
 
   let fileIndex = 0
   for (const filePath of filePaths) {
@@ -368,7 +751,7 @@ async function postWebhook(content, options = {}) {
     await fetch(webhookUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content }),
+      body: JSON.stringify(payload),
     }).catch(() => undefined)
     return
   }
@@ -379,9 +762,27 @@ async function postWebhook(content, options = {}) {
   }).catch(() => undefined)
 }
 
+function buildDiscordEmbed({ title, description, color = 0x5574ff, fields = [] }) {
+  return {
+    title,
+    description,
+    color,
+    fields: fields.filter((field) => field?.value).map((field) => ({
+      name: field.name,
+      value: String(field.value).slice(0, 1000),
+      inline: Boolean(field.inline),
+    })),
+    timestamp: nowIso(),
+  }
+}
+
 function startExecutionSession(task) {
   const sessionId = `mc2-${task.id}-${Date.now()}`
   const imagePaths = writeTaskAttachments(task)
+  const pendingQuestions = (task.clarificationQuestions ?? [])
+    .filter((question) => question.required && !String(question.answer || '').trim())
+    .map((question) => `- ${question.question}`)
+    .join('\n')
   const message = [
     'Mission Control 2.0 execution task',
     `Task ID: ${task.id}`,
@@ -389,6 +790,16 @@ function startExecutionSession(task) {
     `Objective: ${task.objective ?? ''}`,
     `Target URL: ${task.targetUrl ?? 'not specified'}`,
     `Acceptance Criteria:\n${buildAcceptanceList(task)}`,
+    `Harness browser capabilities: ${(task.harnessCapabilities?.browser ?? []).join(', ') || 'none'}`,
+    `Harness QA capabilities: ${(task.harnessCapabilities?.qa ?? []).join(', ') || 'none'}`,
+    `Harness design capabilities: ${(task.harnessCapabilities?.design ?? []).join(', ') || 'none'}`,
+    pendingQuestions
+      ? `Required clarification has already been answered before dispatch; if details still feel ambiguous, use the recorded user answers and do not stop for generic uncertainty.\nPreviously pending questions were:\n${pendingQuestions}`
+      : 'Required clarification questions are complete. Use the recorded answers below as product intent.',
+    (task.clarificationQuestions ?? []).length
+      ? `Recorded user clarification:\n${task.clarificationQuestions.map((question) => `- ${question.question}\n  Answer: ${question.answer || 'not answered'}${question.notes ? `\n  Notes: ${question.notes}` : ''}`).join('\n')}`
+      : 'Recorded user clarification: none.',
+    `Execution plan items:\n${(task.planItems ?? []).map((item, index) => `${index + 1}. [${item.status}] ${item.title}`).join('\n')}`,
     imagePaths.length
       ? `Reference images (${imagePaths.length}):\n${imagePaths.map((p, i) => `${i + 1}. ${p}`).join('\n')}\nUse these images as context for implementation.`
       : 'Reference images: none provided.',
@@ -396,8 +807,9 @@ function startExecutionSession(task) {
     'Execution contract:',
     '1) Implement the task in code.',
     `2) Append progress notes to automation/run-logs/${task.id}.md.`,
-    '3) On success: update automation/board-state.json for this task lane=testing and set resultSummary + completedAt.',
-    '4) On failure: set lane=triaged and write resultSummary + completedAt + failure reason.',
+    '3) Keep task.planItems current in automation/board-state.json if you refine or complete sub-steps while working.',
+    '4) On success: update automation/board-state.json for this task lane=testing and set resultSummary + completedAt.',
+    '5) On failure: set lane=triaged and write resultSummary + completedAt + failure reason.',
   ].join('\n\n')
 
   const child = spawn('openclaw', ['agent', '--session-id', sessionId, '--message', message], {
@@ -424,6 +836,7 @@ function startQaSession(task) {
   fs.rmSync(qaResultPath, { force: true })
 
   const likelyWebsite = isLikelyWebsiteTask(task)
+  const inferredTargetUrl = task.targetUrl?.trim() || 'http://127.0.0.1:5173'
   const message = [
     'Mission Control 2.0 QA task',
     `Task ID: ${task.id}`,
@@ -433,23 +846,36 @@ function startQaSession(task) {
     `Likely website/frontend task: ${likelyWebsite ? 'yes' : 'no'}`,
     `Acceptance Criteria:\n${buildAcceptanceList(task)}`,
     `Builder result summary: ${task.resultSummary ?? 'No execution summary available.'}`,
+    `Harness browser capabilities: ${(task.harnessCapabilities?.browser ?? []).join(', ') || 'none'}`,
+    `Harness QA capabilities: ${(task.harnessCapabilities?.qa ?? []).join(', ') || 'none'}`,
     `Working directory: ${MISSION_CONTROL_ROOT}`,
     'QA contract (must follow):',
     '1) Evaluate whether this task meets acceptance criteria.',
-    '2) If this is website/frontend related, use the Agent Browser skill to open the relevant page, interact with UI (click/type/navigation as needed), and capture evidence (screenshots/log observations).',
-    '3) If no target URL is provided, infer it from local defaults (for example local dev URL) and state what URL was tested.',
-    `4) Write machine-readable QA result JSON to: ${qaResultPath}`,
-    '5) JSON schema:',
+    '2) Run a verification harness mindset: attempt build/typecheck, tests, and at least one adversarial probe where the project allows it.',
+    '3) If this is website/frontend related, you must use the browser harness. Do not skip browser execution unless you hit a real blocker.',
+    `4) Browser launch rules for website/frontend tasks: first ensure the local app is reachable. If ${inferredTargetUrl} is not responding, start it with \`npm run run:website\`, wait for it to boot, then open the browser to the best local page.`,
+    `5) Use ${inferredTargetUrl} as the default first page unless the project clearly points to a better page.`,
+    '6) In the browser, perform at least one meaningful interaction (click, type, navigate, or verify visible state) and capture screenshot evidence.',
+    '7) If the browser harness itself fails, return verdict=partial with a clear blocker and the exact step that failed.',
+    `8) Write machine-readable QA result JSON to: ${qaResultPath}`,
+    '9) JSON schema:',
     '{',
     '  "taskId": "string",',
-    '  "status": "pass" | "fail",',
+    '  "verdict": "pass" | "fail" | "partial",',
+    '  "status": "pass" | "fail" | "partial" (legacy alias for verdict, optional),',
     '  "summary": "string",',
+    '  "checks": [{"id":"string","status":"passed"|"failed"|"skipped","detail":"string"}, ...],',
     '  "failureReasons": ["string", ...],',
+    '  "reproSteps": ["string", ...],',
     '  "guidancePrompt": "string",',
     '  "evidence": ["string", ...]',
     '}',
-    `6) Append QA notes to automation/run-logs/${task.id}-qa.md.`,
-    '7) Keep result concise and concrete. If QA fails, guidancePrompt must contain implementation guidance for the coder.',
+    `10) Append QA notes to automation/run-logs/${task.id}-qa.md.`,
+    '11) Verdict rules: pass only when acceptance criteria are satisfied and evidence is attached; fail when you found a real problem; partial only for environment/tooling blockers.',
+    '12) Always include concrete reproduction steps for fail or partial verdicts.',
+    '13) Keep result concise and concrete. If QA fails, guidancePrompt must contain implementation guidance for the coder.',
+    `Preflight verification results:\n${(task.verification?.checks ?? []).map((check, index) => `${index + 1}. ${check.label} [${check.status}]${check.detail ? ` - ${check.detail}` : ''}`).join('\n')}`,
+    `Verification checklist:\n${(task.verification?.checks ?? []).map((check, index) => `${index + 1}. ${check.label}`).join('\n')}`,
   ].join('\n\n')
 
   const child = spawn('openclaw', ['agent', '--session-id', sessionId, '--message', message], {
@@ -479,7 +905,14 @@ function readQaResult(taskId) {
 }
 
 function normalizeQaResult(task, qaResult, exitCode) {
-  const status = qaResult?.status === 'pass' ? 'pass' : qaResult?.status === 'fail' ? 'fail' : null
+  const requestedVerdict = qaResult?.verdict ?? qaResult?.status
+  const status = requestedVerdict === 'pass'
+    ? 'pass'
+    : requestedVerdict === 'fail'
+      ? 'fail'
+      : requestedVerdict === 'partial'
+        ? 'partial'
+        : null
   const summary = typeof qaResult?.summary === 'string' && qaResult.summary.trim()
     ? qaResult.summary.trim()
     : (exitCode === 0 ? 'QA session finished but returned no structured summary.' : `QA session exited with code ${exitCode}.`)
@@ -492,20 +925,71 @@ function normalizeQaResult(task, qaResult, exitCode) {
     ? qaResult.evidence.filter((x) => typeof x === 'string' && x.trim()).map((x) => x.trim())
     : []
 
+  const reproSteps = Array.isArray(qaResult?.reproSteps)
+    ? qaResult.reproSteps.filter((x) => typeof x === 'string' && x.trim()).map((x) => x.trim())
+    : []
+
+  const checks = Array.isArray(qaResult?.checks)
+    ? qaResult.checks
+        .filter((x) => x && typeof x === 'object')
+        .map((x, index) => ({
+          id: typeof x.id === 'string' && x.id.trim() ? x.id.trim() : `check-${index + 1}`,
+          status: ['passed', 'failed', 'skipped'].includes(x.status) ? x.status : 'skipped',
+          detail: typeof x.detail === 'string' ? x.detail.trim() : '',
+        }))
+    : []
+
   const guidancePrompt = typeof qaResult?.guidancePrompt === 'string' && qaResult.guidancePrompt.trim()
     ? qaResult.guidancePrompt.trim()
     : `Please fix task ${task.id} (${task.title ?? ''}) to satisfy acceptance criteria. Include concrete UI and behavior checks and provide evidence.`
 
-  if (status) {
-    return { status, summary, failureReasons, evidence, guidancePrompt }
+  const likelyWebsite = isLikelyWebsiteTask(task)
+  const preflightFailed = (task?.verification?.checks ?? []).some((check) => check.id !== 'browser' && check.id !== 'regression' && check.status === 'failed')
+
+  let finalStatus = status
+  const finalFailureReasons = [...failureReasons]
+  const finalReproSteps = [...reproSteps]
+
+  if (finalStatus === 'pass' && evidence.length === 0) {
+    finalStatus = 'partial'
+    finalFailureReasons.push('QA reported pass but attached no evidence.')
+  }
+
+  if (likelyWebsite && finalStatus === 'pass' && !collectQaEvidenceImages(task, { evidence }, 1).length) {
+    finalStatus = 'partial'
+    finalFailureReasons.push('Frontend/browser task reported pass without browser screenshot evidence.')
+  }
+
+  if ((finalStatus === 'fail' || finalStatus === 'partial') && finalReproSteps.length === 0) {
+    finalStatus = 'partial'
+    finalFailureReasons.push('Missing reproduction steps in QA result.')
+  }
+
+  if (finalStatus === 'pass' && preflightFailed) {
+    finalStatus = 'partial'
+    finalFailureReasons.push('Automated preflight commands failed, so pass cannot be trusted.')
+  }
+
+  if (finalStatus) {
+    return {
+      status: finalStatus,
+      summary,
+      failureReasons: finalFailureReasons,
+      reproSteps: finalReproSteps,
+      evidence,
+      guidancePrompt,
+      checks,
+    }
   }
 
   return {
-    status: exitCode === 0 ? 'fail' : 'fail',
+    status: 'partial',
     summary,
-    failureReasons: failureReasons.length ? failureReasons : ['QA result JSON missing or malformed.'],
+    failureReasons: finalFailureReasons.length ? finalFailureReasons : ['QA result JSON missing or malformed.'],
+    reproSteps: finalReproSteps,
     evidence,
     guidancePrompt,
+    checks,
   }
 }
 
@@ -526,6 +1010,9 @@ function createQaFixTask(tasks, sourceTask, qaVerdict, qaEvidenceImages = []) {
   const evidenceLines = qaEvidenceImages.length
     ? qaEvidenceImages.map((img, idx) => `${idx + 1}. ${img}`).join('\n')
     : 'No screenshot evidence was captured by QA.'
+  const reproLines = qaVerdict.reproSteps?.length
+    ? qaVerdict.reproSteps.map((line, index) => `${index + 1}. ${line}`).join('\n')
+    : 'QA did not include reproduction steps.'
 
   const objective = [
     `Fix QA failure from ${sourceTask.id} (${sourceTask.title ?? ''}).`,
@@ -538,6 +1025,9 @@ function createQaFixTask(tasks, sourceTask, qaVerdict, qaEvidenceImages = []) {
     'Screenshot evidence:',
     evidenceLines,
     '',
+    'Reproduction steps:',
+    reproLines,
+    '',
     'Implementation guidance prompt:',
     qaVerdict.guidancePrompt,
   ].join('\n')
@@ -548,6 +1038,11 @@ function createQaFixTask(tasks, sourceTask, qaVerdict, qaEvidenceImages = []) {
     objective,
     acceptanceCriteria: Array.isArray(sourceTask.acceptanceCriteria) ? sourceTask.acceptanceCriteria : [],
     plan: ['Review QA findings', 'Implement targeted fix', 'Prepare for QA re-test'],
+    planItems: [
+      createPlanItem('Clarify the task with the user', 'done', { kind: 'clarify', details: 'Derived from previous QA failure context.' }),
+      createPlanItem('Implement the requested work', 'pending', { kind: 'implement' }),
+      createPlanItem('Run verification and browser QA', 'pending', { kind: 'verify' }),
+    ],
     next: '',
     tags: Array.from(new Set([...(Array.isArray(sourceTask.tags) ? sourceTask.tags : []), 'qa-fix', 'qa-fail', 'MissionControl'])),
     lane: 'backlog',
@@ -557,6 +1052,15 @@ function createQaFixTask(tasks, sourceTask, qaVerdict, qaEvidenceImages = []) {
     qaSummary: qaVerdict.summary,
     qaGuidancePrompt: qaVerdict.guidancePrompt,
     imageAttachments: buildTaskImageAttachmentsFromPaths(qaEvidenceImages),
+    harnessCapabilities: sourceTask.harnessCapabilities ?? { ...DEFAULT_HARNESS_CAPABILITIES },
+    clarificationQuestions: Array.isArray(sourceTask.clarificationQuestions) ? sourceTask.clarificationQuestions : buildDefaultClarificationQuestions(sourceTask),
+    verification: {
+      status: 'pending',
+      verdict: undefined,
+      summary: '',
+      evidence: [],
+      checks: buildVerificationChecks(isLikelyWebsiteTask(sourceTask)),
+    },
   }
 }
 
@@ -581,6 +1085,36 @@ async function finalizeQaTaskOutcome(latestState, task, qaSessionKey, exitCode, 
   const qaResultRaw = readQaResult(task.id)
   const qaVerdict = normalizeQaResult(current, qaResultRaw, exitCode)
   const finishedAt = nowIso()
+  current.verification = current.verification ?? normalizeVerification(current)
+  current.verification.status = qaVerdict.status === 'pass' ? 'passed' : 'failed'
+  current.verification.verdict = qaVerdict.status
+  current.verification.summary = qaVerdict.summary
+  current.verification.evidence = qaVerdict.evidence
+  const qaChecksById = new Map((qaVerdict.checks ?? []).map((check) => [check.id, check]))
+  current.verification.reproSteps = qaVerdict.reproSteps
+  current.verification.checks = (current.verification.checks ?? []).map((check) => {
+    const fromQa = qaChecksById.get(check.id)
+    if (fromQa) {
+      return {
+        ...check,
+        status: fromQa.status,
+        detail: fromQa.detail || check.detail || qaVerdict.summary,
+      }
+    }
+
+    return {
+      ...check,
+      status: qaVerdict.status === 'pass'
+        ? (check.status === 'pending' ? 'passed' : check.status)
+        : qaVerdict.status === 'partial'
+          ? (check.status === 'pending' ? 'skipped' : check.status)
+          : (check.id === 'browser' || check.id === 'regression' ? 'failed' : check.status === 'pending' ? 'passed' : check.status),
+      detail: check.detail || (check.id === 'browser' && qaVerdict.evidence.length
+        ? `Evidence captured: ${qaVerdict.evidence.join(', ')}`
+        : qaVerdict.summary),
+    }
+  })
+  updatePlanItemStatus(current, 'verify', qaVerdict.status === 'pass' ? 'done' : 'failed', qaVerdict.summary, { sessionId: current.qaSessionKey ?? qaSessionKey })
 
   latestState.tasks.splice(currentIndex, 1)
 
@@ -611,13 +1145,17 @@ async function finalizeQaTaskOutcome(latestState, task, qaSessionKey, exitCode, 
       status: 'completed',
     })
 
-    await postWebhook([
-      '✅ Mission Control QA Passed',
-      `Task: ${current.title ?? current.id}`,
-      'Action: removed from board as completed.',
-      `Summary: ${qaVerdict.summary}`,
-      qaEvidenceLine,
-    ].join('\n'), {
+    await postWebhook(`QA passed: ${current.title ?? current.id}`, {
+      embeds: [buildDiscordEmbed({
+        title: 'QA Passed',
+        description: current.title ?? current.id,
+        color: 0x3fcb88,
+        fields: [
+          { name: 'Outcome', value: 'Removed from board as completed.', inline: true },
+          { name: 'Summary', value: qaVerdict.summary },
+          { name: 'Evidence', value: qaEvidenceLine },
+        ],
+      })],
       files: qaEvidenceImages,
     })
   } else {
@@ -649,16 +1187,23 @@ async function finalizeQaTaskOutcome(latestState, task, qaSessionKey, exitCode, 
     const reasonLines = qaVerdict.failureReasons.length
       ? qaVerdict.failureReasons.map((line) => `- ${line}`)
       : ['- no explicit reason returned by QA.']
+    const reproLines = qaVerdict.reproSteps.length
+      ? ['Reproduction steps:', ...qaVerdict.reproSteps.map((line, index) => `${index + 1}. ${line}`)]
+      : []
 
-    await postWebhook([
-      '❌ Mission Control QA Failed',
-      `Task: ${current.title ?? current.id}`,
-      `Created follow-up backlog task: ${followUp.id}`,
-      `Summary: ${qaVerdict.summary}`,
-      'Why failed:',
-      ...reasonLines,
-      qaEvidenceLine,
-    ].join('\n'), {
+    await postWebhook(`${qaVerdict.status === 'partial' ? 'QA partial' : 'QA failed'}: ${current.title ?? current.id}`, {
+      embeds: [buildDiscordEmbed({
+        title: qaVerdict.status === 'partial' ? 'QA Partial' : 'QA Failed',
+        description: current.title ?? current.id,
+        color: qaVerdict.status === 'partial' ? 0xf0b35f : 0xff6868,
+        fields: [
+          { name: 'Follow-up task', value: followUp.id, inline: true },
+          { name: 'Summary', value: qaVerdict.summary },
+          { name: 'Why failed', value: reasonLines.join('\n') },
+          { name: 'Repro steps', value: reproLines.length ? reproLines.slice(1).join('\n') : 'Not provided.' },
+          { name: 'Evidence', value: qaEvidenceLine },
+        ],
+      })],
       files: qaEvidenceImages,
     })
   }
@@ -672,8 +1217,8 @@ function mergeIncomingTasks(previousTasks, incomingTasks) {
   const previousById = new Map((previousTasks ?? []).map((task) => [task.id, task]))
   return (incomingTasks ?? []).map((task) => {
     const previous = previousById.get(task?.id)
-    if (!previous) return task
-    return { ...previous, ...task }
+    if (!previous) return normalizeTask(task)
+    return normalizeTask({ ...previous, ...task })
   })
 }
 
@@ -713,23 +1258,33 @@ async function notifyBoardEvents(previousState, nextState) {
   for (const task of nextTasks) {
     const previous = previousById.get(task.id)
     if (!previous) {
-      await postWebhook([
-        '🆕 Mission Control New Task',
-        `Name: ${task.title ?? task.id}`,
-        `Description: ${task.objective ?? ''}`,
-        `Status: ${task.lane ?? 'backlog'}`,
-      ].join('\n'))
+      await postWebhook(`New task: ${task.title ?? task.id}`, {
+        embeds: [buildDiscordEmbed({
+          title: 'New Task',
+          description: task.title ?? task.id,
+          color: 0x5d89ff,
+          fields: [
+            { name: 'Stage', value: task.lane ?? 'backlog', inline: true },
+            { name: 'Objective', value: task.objective ?? 'No description provided.' },
+          ],
+        })],
+      })
       continue
     }
 
-    if (previous.lane !== task.lane && (task.lane === 'testing' || task.lane === 'in_progress')) {
-      await postWebhook([
-        '🔄 Mission Control Task Status Changed',
-        `Name: ${task.title ?? task.id}`,
-        `Description: ${task.objective ?? ''}`,
-        `Status: ${task.lane}`,
-        task.resultSummary ? `Summary: ${task.resultSummary}` : '',
-      ].filter(Boolean).join('\n'))
+    if (previous.lane !== task.lane) {
+      await postWebhook(`Task moved: ${task.title ?? task.id}`, {
+        embeds: [buildDiscordEmbed({
+          title: 'Task Status Changed',
+          description: task.title ?? task.id,
+          color: task.lane === 'testing' ? 0xf0b35f : task.lane === 'in_progress' ? 0x3fcb88 : 0x8898c0,
+          fields: [
+            { name: 'From', value: previous.lane ?? 'unknown', inline: true },
+            { name: 'To', value: task.lane ?? 'unknown', inline: true },
+            { name: 'Summary', value: task.resultSummary || task.objective || 'No summary yet.' },
+          ],
+        })],
+      })
     }
   }
 }
@@ -742,14 +1297,36 @@ async function dispatchTriagedTasksFromBoard() {
   for (const task of tasks) {
     if (task?.lane !== 'triaged') continue
     if (task?.dispatchedAt) continue
+    task.harnessCapabilities = task.harnessCapabilities ?? { ...DEFAULT_HARNESS_CAPABILITIES }
+    task.planItems = normalizePlanItems(task)
+    task.clarificationQuestions = normalizeClarificationQuestions(task)
+    task.verification = normalizeVerification(task)
+
+    if (!allRequiredQuestionsAnswered(task)) {
+      if (task.dispatchBlockedReason !== 'clarification_required') {
+        updatePlanItemStatus(task, 'clarify', 'running', 'Waiting for required user answers before dispatch.')
+        task.dispatchBlockedReason = 'clarification_required'
+        changed = true
+      }
+      continue
+    }
 
     const now = nowIso()
     const { sessionId: sessionKey, pid, child } = startExecutionSession(task)
 
     task.dispatchedAt = now
+    task.dispatchBlockedReason = ''
     task.lane = 'in_progress'
     task.runId = task.runId ?? makeId('RUN')
     task.dispatchSessionKey = sessionKey
+    updatePlanItemStatus(task, 'clarify', 'done', 'Required user answers are recorded.', { sessionId: sessionKey })
+    updatePlanItemStatus(task, 'implement', 'running', 'Coder session is actively working on the task.', { sessionId: sessionKey, userAbortable: true })
+    updatePlanItemStatus(task, 'verify', 'pending', 'Verification will start after implementation finishes.')
+    task.verification.status = 'pending'
+    task.verification.verdict = undefined
+    task.verification.summary = ''
+    task.verification.evidence = []
+    task.verification.checks = buildVerificationChecks(isLikelyWebsiteTask(task))
     changed = true
 
     appendDispatchQueue({
@@ -780,6 +1357,8 @@ async function dispatchTriagedTasksFromBoard() {
         current.resultSummary = code === 0
           ? (current.resultSummary || 'Execution session ended.')
           : `Execution session exited with code ${code}.`
+        updatePlanItemStatus(current, 'implement', code === 0 ? 'done' : 'failed', current.resultSummary, { sessionId: current.dispatchSessionKey })
+        updatePlanItemStatus(current, 'verify', 'running', 'Verification harness is preparing QA checks.', { sessionId: current.qaSessionKey })
 
         pushActivity(latest, {
           id: makeId('act'),
@@ -801,14 +1380,17 @@ async function dispatchTriagedTasksFromBoard() {
         })
 
         const playwrightImages = collectPlaywrightImagesForTask(current)
-        await postWebhook([
-          '✅ Mission Control Task Execution Ended',
-          `Name: ${current.title ?? current.id}`,
-          `Description: ${current.objective ?? ''}`,
-          `Status: ${current.lane ?? 'in_progress'}`,
-          `Summary: ${current.resultSummary}`,
-          playwrightImages.length ? `Playwright images: ${playwrightImages.map((p) => path.basename(p)).join(', ')}` : '',
-        ].filter(Boolean).join('\n'), {
+        await postWebhook(`Execution finished: ${current.title ?? current.id}`, {
+          embeds: [buildDiscordEmbed({
+            title: 'Coder Session Finished',
+            description: current.title ?? current.id,
+            color: 0x5d89ff,
+            fields: [
+              { name: 'Next Stage', value: current.lane ?? 'testing', inline: true },
+              { name: 'Summary', value: current.resultSummary || 'Execution finished.' },
+              { name: 'Artifacts', value: playwrightImages.length ? playwrightImages.map((p) => path.basename(p)).join(', ') : 'No screenshots found.' },
+            ],
+          })],
           files: playwrightImages,
         })
       } catch (error) {
@@ -816,13 +1398,18 @@ async function dispatchTriagedTasksFromBoard() {
       }
     })
 
-    await postWebhook([
-      '🚀 Mission Control Dispatch Requested',
-      `Name: ${task.title ?? task.id}`,
-      `Description: ${task.objective ?? ''}`,
-      'Status: in_progress',
-      `Run: ${task.runId}`,
-    ].join('\n'))
+    await postWebhook(`Dispatch requested: ${task.title ?? task.id}`, {
+      embeds: [buildDiscordEmbed({
+        title: 'Coder Session Started',
+        description: task.title ?? task.id,
+        color: 0x3fcb88,
+        fields: [
+          { name: 'Run', value: task.runId, inline: true },
+          { name: 'Stage', value: 'in_progress', inline: true },
+          { name: 'Objective', value: task.objective ?? 'No description provided.' },
+        ],
+      })],
+    })
   }
 
   if (changed) writeState(state)
@@ -838,6 +1425,7 @@ async function dispatchTestingTasksForQa() {
     if (task?.qaDispatchedAt || task?.qaStatus === 'running') continue
 
     const now = nowIso()
+    const preflight = runVerificationPreflight(task)
     const { sessionId, pid, child, qaResultPath, likelyWebsite } = startQaSession(task)
 
     task.qaDispatchedAt = now
@@ -845,6 +1433,18 @@ async function dispatchTestingTasksForQa() {
     task.qaSessionKey = sessionId
     task.qaRunId = task.qaRunId ?? makeId('QARUN')
     task.qaResultPath = qaResultPath
+    task.verification = task.verification ?? normalizeVerification(task)
+    task.verification.status = preflight.status
+    task.verification.summary = preflight.summary
+    task.verification.checks = preflight.checks.map((check) => ({
+      id: check.id,
+      label: buildVerificationChecks(likelyWebsite).find((candidate) => candidate.id === check.id)?.label
+        || (check.id === 'lint' ? 'Run lint checks' : check.label),
+      status: check.status,
+      detail: check.detail,
+      command: check.command,
+    }))
+    updatePlanItemStatus(task, 'verify', 'running', 'Verification harness and QA session are running.', { sessionId })
     changed = true
 
     pushActivity(state, {
@@ -884,12 +1484,18 @@ async function dispatchTestingTasksForQa() {
       }
     })
 
-    await postWebhook([
-      '🧪 Mission Control QA Started',
-      `Task: ${task.title ?? task.id}`,
-      `Testing lane item is now being reviewed in a dedicated QA session (${task.qaSessionKey}).`,
-      `Website task: ${likelyWebsite ? 'yes' : 'no'}`,
-    ].join('\n'))
+    await postWebhook(`QA started: ${task.title ?? task.id}`, {
+      embeds: [buildDiscordEmbed({
+        title: 'QA Session Started',
+        description: task.title ?? task.id,
+        color: 0xf0b35f,
+        fields: [
+          { name: 'Session', value: task.qaSessionKey, inline: true },
+          { name: 'Browser QA', value: likelyWebsite ? 'Yes' : 'No', inline: true },
+          { name: 'Summary', value: task.verification?.summary || 'QA is reviewing this task now.' },
+        ],
+      })],
+    })
   }
 
   if (changed) writeState(state)
@@ -1321,43 +1927,52 @@ const server = http.createServer((req, res) => {
     return
   }
 
+  if (url.pathname === '/settings' && req.method === 'GET') {
+    res.setHeader('Content-Type', 'application/json; charset=utf-8')
+    res.end(JSON.stringify({ ok: true, settings: getWebhookConfig() }))
+    return
+  }
+
+  if (url.pathname === '/settings' && req.method === 'POST') {
+    parseJsonBody(req, 100_000)
+      .then((parsed) => {
+        const webhookUrl = typeof parsed?.webhookUrl === 'string' ? parsed.webhookUrl : ''
+        const settings = saveWebhookConfig(webhookUrl)
+        res.setHeader('Content-Type', 'application/json; charset=utf-8')
+        res.end(JSON.stringify({ ok: true, settings }))
+      })
+      .catch((error) => {
+        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' })
+        res.end(JSON.stringify({ ok: false, error: error instanceof Error ? error.message : 'Failed to save settings' }))
+      })
+    return
+  }
+
   if (url.pathname === '/docs/projects' && req.method === 'POST') {
-    let body = ''
-    req.on('data', (chunk) => {
-      body += chunk
-      if (body.length > 100_000) req.destroy()
-    })
-    req.on('end', () => {
-      try {
-        const parsed = JSON.parse(body || '{}')
+    parseJsonBody(req, 100_000)
+      .then((parsed) => {
         const project = createDocProject(parsed)
         res.setHeader('Content-Type', 'application/json; charset=utf-8')
         res.end(JSON.stringify({ ok: true, project }))
-      } catch (error) {
+      })
+      .catch((error) => {
         res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' })
         res.end(JSON.stringify({ ok: false, error: error instanceof Error ? error.message : 'Failed to create project' }))
-      }
-    })
+      })
     return
   }
 
   if (url.pathname === '/docs/doc' && (req.method === 'POST' || req.method === 'PUT')) {
-    let body = ''
-    req.on('data', (chunk) => {
-      body += chunk
-      if (body.length > 1_500_000) req.destroy()
-    })
-    req.on('end', () => {
-      try {
-        const parsed = JSON.parse(body || '{}')
+    parseJsonBody(req, 1_500_000)
+      .then((parsed) => {
         const doc = saveAuthoredDoc(parsed)
         res.setHeader('Content-Type', 'application/json; charset=utf-8')
         res.end(JSON.stringify({ ok: true, doc }))
-      } catch (error) {
+      })
+      .catch((error) => {
         res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' })
         res.end(JSON.stringify({ ok: false, error: error instanceof Error ? error.message : 'Failed to save document' }))
-      }
-    })
+      })
     return
   }
 
@@ -1386,14 +2001,8 @@ const server = http.createServer((req, res) => {
   }
 
   if (url.pathname === '/state' && req.method === 'POST') {
-    let body = ''
-    req.on('data', (chunk) => {
-      body += chunk
-      if (body.length > 2_000_000) req.destroy()
-    })
-    req.on('end', async () => {
-      try {
-        const parsed = JSON.parse(body || '{}')
+    parseJsonBody(req, 2_000_000)
+      .then(async (parsed) => {
         const previous = readState()
         const baseUpdatedAt = typeof parsed.baseUpdatedAt === 'string' ? parsed.baseUpdatedAt : ''
         if (baseUpdatedAt && previous.updatedAt && baseUpdatedAt !== previous.updatedAt) {
@@ -1420,11 +2029,11 @@ const server = http.createServer((req, res) => {
 
         res.setHeader('Content-Type', 'application/json; charset=utf-8')
         res.end(JSON.stringify({ ok: true, state: saved }))
-      } catch (error) {
+      })
+      .catch((error) => {
         res.writeHead(400)
         res.end(JSON.stringify({ ok: false, error: String(error) }))
-      }
-    })
+      })
     return
   }
 
