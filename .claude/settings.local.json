@@ -18,7 +18,13 @@
       "Bash(powershell.exe -Command \"Select-String -Path ''F:\\\\GitHub Clone\\\\mission-control-2.0\\\\src\\\\styles\\\\*.css'' -Pattern ''form-group|form-input|form-label'' | Select-Object -First 20\")",
       "Bash(powershell.exe -Command \"Set-Location ''F:\\\\GitHub Clone\\\\mission-control-2.0''; git remote -v; git status --short\")",
       "Bash(powershell.exe -Command \"Set-Location ''F:\\\\GitHub Clone\\\\mission-control-2.0''; git checkout -b ''neo-ui'' 2>&1\")",
-      "Bash(powershell.exe -Command \"Set-Location ''F:\\\\GitHub Clone\\\\mission-control-2.0''; git add -A; git commit -m ''feat: Mission Control 2.0 Neo UI — complete frontend redesign:*)"
+      "Bash(powershell.exe -Command \"Set-Location ''F:\\\\GitHub Clone\\\\mission-control-2.0''; git add -A; git commit -m ''feat: Mission Control 2.0 Neo UI — complete frontend redesign:*)",
+      "Bash(powershell.exe -Command \"Set-Location ''F:\\\\GitHub Clone\\\\mission-control-2.0''; git push origin neo-ui 2>&1\")",
+      "Bash(powershell.exe -Command \"Set-Location ''F:\\\\GitHub Clone\\\\mission-control-2.0''; git remote -v; git branch -a 2>&1\")",
+      "Bash(powershell.exe -Command \"Select-String -Path ''F:\\\\GitHub Clone\\\\mission-control-2.0\\\\src\\\\types\\\\task.ts'' -Pattern ''clarification|Clarification'' | Select-Object Line\")",
+      "Bash(powershell.exe -Command \"Select-String -Path ''F:\\\\GitHub Clone\\\\mission-control-2.0\\\\src\\\\lib\\\\api.ts'' -Pattern ''clarif'' | Select-Object Line\")",
+      "Bash(powershell.exe -Command \"Select-String -Path ''F:\\\\GitHub Clone\\\\mission-control-2.0\\\\automation\\\\board-bridge-server.mjs'' -Pattern ''clarif'' -SimpleMatch | Select-Object -First 10 | Select-Object Line\")",
+      "Bash(powershell.exe -Command \"Set-Location ''F:\\\\GitHub Clone\\\\mission-control-2.0''; git add -A; git commit -m ''修复等待回答功能:*)"
     ]
   }
 }

@@ -7,6 +7,7 @@ import { VerificationChecklist } from '../observability/VerificationChecklist'
 import { SessionTranscript } from '../observability/SessionTranscript'
 import { StatusPill } from '../ui/StatusPill'
 import { Chip } from '../ui/Chip'
+import { ClarificationGate } from '../board/ClarificationGate'
 
 type DetailTab = 'overview' | 'coder' | 'qa' | 'artifacts'
 
@@ -23,11 +24,12 @@ export function TaskDetailActive({ task, detail, board, onClose }: TaskDetailAct
     activeArtifactUrl, setActiveArtifactUrl } = detail
 
   const isRunning = task.lane === 'in_progress'
+  const isBlocked = task.dispatchBlockedReason === 'clarification_required'
   const planItems = task.planItems ?? []
   const verification = task.verification
 
   const tabs: { key: DetailTab; label: string }[] = [
-    { key: 'overview', label: '概览' },
+    { key: 'overview', label: isBlocked ? '⚠ 等待回答' : '概览' },
     { key: 'coder', label: 'Agent 日志' },
     ...(task.qaSessionKey ? [{ key: 'qa' as DetailTab, label: 'QA 日志' }] : []),
     ...(taskArtifacts.length > 0 ? [{ key: 'artifacts' as DetailTab, label: `截图 (${taskArtifacts.length})` }] : []),
@@ -43,6 +45,9 @@ export function TaskDetailActive({ task, detail, board, onClose }: TaskDetailAct
           </div>
           {isRunning && (
             <Chip variant="amber" pulse className="countdown-chip">● 运行中</Chip>
+          )}
+          {isBlocked && (
+            <Chip variant="amber" pulse className="countdown-chip">⚠ 等待你的回答</Chip>
           )}
         </div>
         <button className="btn btn-ghost btn-sm" onClick={onClose}>✕</button>
@@ -68,6 +73,11 @@ export function TaskDetailActive({ task, detail, board, onClose }: TaskDetailAct
       <div className="detail-body detail-tab-body">
         {activeTab === 'overview' && (
           <div className="detail-overview">
+            {/* 澄清问题入口 */}
+            {isBlocked && (task.clarificationQuestions ?? []).length > 0 && (
+              <ClarificationGate task={task} board={board} onClose={onClose} />
+            )}
+
             {task.objective && (
               <div className="detail-section">
                 <div className="label-eyebrow" style={{ marginBottom: 'var(--space-2)' }}>目标描述</div>
