@@ -327,14 +327,15 @@ ul, ol { list-style: none; }
   display: grid;
   grid-template-columns: 280px 1fr;
   gap: 0;
-  height: 100%;
-  min-height: 0;
+  flex: 1;
+  min-height: 0;   /* 允许在 flex 父容器内收缩 */
+  overflow: hidden;
 }
 
 .docs-sidebar {
   border-right: 1px solid var(--color-border-subtle);
   overflow-y: auto;
-  height: 100%;
+  min-height: 0;
   padding: var(--space-4);
   display: flex;
   flex-direction: column;
@@ -343,6 +344,7 @@ ul, ol { list-style: none; }
 
 .docs-content {
   overflow-y: auto;
+  min-height: 0;
   padding: var(--space-6);
 }
 
@@ -362,8 +364,9 @@ ul, ol { list-style: none; }
 .detail-layout {
   display: flex;
   flex-direction: column;
-  height: 100%;
+  flex: 1;
   min-height: 0;
+  /* 确保在 modal-card 里高度可收缩 */
 }
 
 .detail-layout-wide {

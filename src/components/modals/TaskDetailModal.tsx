@@ -25,7 +25,11 @@ export function TaskDetailModal({ detail, board }: TaskDetailModalProps) {
       noBackdropClose
     >
       {selectedTask && (
-        <div onDragStart={markModalDragEvent} onDragEnd={markModalDragEvent}>
+        <div
+          onDragStart={markModalDragEvent}
+          onDragEnd={markModalDragEvent}
+          style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}
+        >
           {selectedTask.lane === 'backlog' ? (
             <TaskDetailBacklog
               task={selectedTask}

@@ -206,6 +206,11 @@
   background-position: right var(--space-3) center;
   padding-right: var(--space-8);
   appearance: none;
+  color-scheme: dark;  /* 让浏览器原生弹出层跟随暗色主题 */
+}
+
+[data-theme="light"] .form-select {
+  color-scheme: light;
 }
 
 /* ── 向导弹框结构 ──────────────────────────────────────────── */
@@ -451,6 +456,7 @@
 
 .detail-body {
   flex: 1;
+  min-height: 0;        /* 关键：允许 flex 子项在 overflow:hidden 容器内滚动 */
   overflow-y: auto;
   padding: var(--space-5) var(--space-6);
 }
@@ -721,7 +727,8 @@
 .docs-editor {
   display: flex;
   flex-direction: column;
-  height: 100%;
+  flex: 1;
+  min-height: 0;
 }
 
 .docs-editor-header {
@@ -757,6 +764,7 @@
 
 .docs-editor-textarea {
   flex: 1;
+  min-height: 0;
   width: 100%;
   padding: var(--space-6);
   background: transparent;
@@ -768,12 +776,15 @@
   resize: none;
   outline: none;
   box-sizing: border-box;
+  overflow-y: auto;
 }
 
 .docs-viewer {
   display: flex;
   flex-direction: column;
-  height: 100%;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .docs-viewer-header {
@@ -802,6 +813,7 @@
 
 .docs-viewer-body {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
   padding: var(--space-6);
 }
@@ -828,7 +840,8 @@
 .docs-page {
   display: flex;
   flex-direction: column;
-  height: 100%;
+  flex: 1;
+  min-height: 0;
   overflow: hidden;
 }
 

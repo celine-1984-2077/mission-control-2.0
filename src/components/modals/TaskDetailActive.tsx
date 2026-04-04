@@ -41,9 +41,10 @@ export function TaskDetailActive({ task, detail, board, onClose }: TaskDetailAct
         <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
           <div>
             <div className="task-id" style={{ marginBottom: 'var(--space-1)' }}>{task.id}</div>
-            <StatusPill task={task} />
+            {/* isBlocked 时 Chip 已显示状态，不重复渲染 StatusPill */}
+            {!isBlocked && <StatusPill task={task} />}
           </div>
-          {isRunning && (
+          {isRunning && !isBlocked && (
             <Chip variant="amber" pulse className="countdown-chip">● 运行中</Chip>
           )}
           {isBlocked && (
