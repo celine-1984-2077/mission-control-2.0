@@ -1,0 +1,112 @@
+/* ═══════════════════════════════════════════════════════════════
+   MISSION CONTROL 2.0 — ANIMATIONS
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── Agent 脉冲（思考中：1.8s ease-in-out，行动中：0.9s linear）*/
+@keyframes agentPulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%       { opacity: 0.45; transform: scale(0.65); }
+}
+
+/* ── CRT 扫描线扫过 ──────────────────────────────────────── */
+@keyframes scanSweep {
+  0%   { transform: translateY(-8px); opacity: 0; }
+  8%   { opacity: 0.55; }
+  92%  { opacity: 0.55; }
+  100% { transform: translateY(calc(100% + 8px)); opacity: 0; }
+}
+
+/* ── 卡片入场（新任务/拖放放下）──────────────────────────── */
+@keyframes cardSlideIn {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ── 模态框入场 ──────────────────────────────────────────── */
+@keyframes modalFadeIn {
+  from { opacity: 0; transform: translateY(-18px) scale(0.96); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* ── 遮罩入场 ────────────────────────────────────────────── */
+@keyframes overlayFadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* ── 计划步骤状态变化闪烁 ─────────────────────────────────── */
+@keyframes statusFlash {
+  0%, 100% { background-color: transparent; }
+  40%       { background-color: rgba(240, 150, 58, 0.14); }
+}
+
+/* ── Session 光标闪烁 ─────────────────────────────────────── */
+@keyframes cursorBlink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0; }
+}
+
+/* ── 泳道拖放目标脉冲 ─────────────────────────────────────── */
+@keyframes laneDropPulse {
+  0%, 100% { border-color: rgba(85, 116, 255, 0.35); }
+  50%       { border-color: rgba(85, 116, 255, 0.75); }
+}
+
+/* ── 主题切换图标旋转 ─────────────────────────────────────── */
+@keyframes iconRotate {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(180deg); }
+}
+
+/* ── 内容淡入 ────────────────────────────────────────────── */
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* ── Tooltip 出现 ────────────────────────────────────────── */
+@keyframes tooltipShow {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ── 通知/Toast 滑入 ─────────────────────────────────────── */
+@keyframes toastSlideIn {
+  from { opacity: 0; transform: translateX(24px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+/* ── 新手引导流程图箭头动画 ───────────────────────────────── */
+@keyframes flowArrowPulse {
+  0%, 100% { opacity: 0.4; transform: translateX(0); }
+  50%       { opacity: 1; transform: translateX(4px); }
+}
+
+/* ── 统计卡片悬浮上浮 ─────────────────────────────────────── */
+@keyframes statLift {
+  from { transform: translateY(0); }
+  to   { transform: translateY(-3px); }
+}
+
+/* ── 辅助工具类 ──────────────────────────────────────────── */
+
+.animate-fade-in {
+  animation: fadeIn var(--transition-default) ease-out both;
+}
+
+.animate-card-in {
+  animation: cardSlideIn 0.25s ease-out both;
+}
+
+.animate-modal-in {
+  animation: modalFadeIn 0.22s ease-out both;
+}
+
+/* 减少动画偏好：尊重系统设置 */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
