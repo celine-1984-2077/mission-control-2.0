@@ -7,6 +7,7 @@ import { DocsView } from './components/docs/DocsView'
 import { SettingsView } from './components/settings/SettingsView'
 import { CreateTaskModal } from './components/modals/CreateTaskModal'
 import { TaskDetailModal } from './components/modals/TaskDetailModal'
+import { CreateProjectModal } from './components/modals/CreateProjectModal'
 import { useBoardState } from './hooks/useBoardState'
 import { useCreateTask } from './hooks/useCreateTask'
 import { useTaskDetail } from './hooks/useTaskDetail'
@@ -50,6 +51,10 @@ export default function App() {
     setAppView('doc')
   }
 
+  function handleCreateProject() {
+    docs.setShowProjectModal(true)
+  }
+
   return (
     <Shell
       sidebar={
@@ -62,6 +67,8 @@ export default function App() {
           onSelectTask={handleSelectTask}
           onSelectDoc={handleSelectDoc}
           onOpenSettings={() => setAppView('settings')}
+          onCreateProject={handleCreateProject}
+          onDeleteProject={docs.deleteProject}
         />
       }
     >
@@ -94,6 +101,8 @@ export default function App() {
         detail={detail}
         board={board}
       />
+
+      <CreateProjectModal docs={docs} />
     </Shell>
   )
 }

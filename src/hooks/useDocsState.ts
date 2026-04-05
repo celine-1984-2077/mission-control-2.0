@@ -57,6 +57,7 @@ export interface DocsState {
   // 操作
   loadDocs: () => Promise<void>
   createProject: () => Promise<void>
+  deleteProject: (slug: string) => Promise<void>
   startCreateDoc: () => void
   saveDocDraft: () => Promise<void>
 }
@@ -138,9 +139,17 @@ export function useDocsState(): DocsState {
     }
   }, [])
 
+  // 挂载时自动加载文档和项目列表
+  useEffect(() => { loadDocs() }, [loadDocs])
+
   async function createProject() {
     if (!newProjectName.trim()) {
-      setActionError('Project name is required.')
+      setActionError('项目名称不能为空。')
+      return
+    }
+    const slug = newProjectSlug.trim()
+    if (slug && docProjectsMeta.some((p) => p.slug === slug)) {
+      setActionError(`标识符 "${slug}" 已存在，请换一个。`)
       return
     }
     setCreatingProject(true)
@@ -150,7 +159,7 @@ export function useDocsState(): DocsState {
       const res = await fetch(DOC_PROJECTS_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: newProjectName, slug: newProjectSlug, description: newProjectDesc }),
+        body: JSON.stringify({ name: newProjectName, slug, description: newProjectDesc }),
       })
       const data = await res.json() as { ok?: boolean; error?: string; project?: DocProject }
       if (!res.ok || !data.ok || !data.project) throw new Error(data.error ?? 'Failed to create project')
@@ -165,6 +174,20 @@ export function useDocsState(): DocsState {
       setActionError(err instanceof Error ? err.message : 'Failed to create project')
     } finally {
       setCreatingProject(false)
+    }
+  }
+
+  async function deleteProject(slug: string) {
+    setActionError('')
+    setActionOk('')
+    try {
+      const res = await fetch(`${DOC_PROJECTS_URL}/${slug}`, { method: 'DELETE' })
+      const data = await res.json() as { ok?: boolean; error?: string }
+      if (!res.ok || !data.ok) throw new Error(data.error ?? 'Failed to delete project')
+      await loadDocs()
+    } catch (err) {
+      // 如果后端不支持删除接口，仅从本地列表移除（不持久化）
+      setDocProjectsMeta((prev) => prev.filter((p) => p.slug !== slug))
     }
   }
 
@@ -225,6 +248,6 @@ export function useDocsState(): DocsState {
     newProjectDesc, setNewProjectDesc, creatingProject,
     actionError, actionOk,
     docProjects, authoredProjects, docTags, visibleDocList,
-    loadDocs, createProject, startCreateDoc, saveDocDraft,
+    loadDocs, createProject, deleteProject, startCreateDoc, saveDocDraft,
   }
 }

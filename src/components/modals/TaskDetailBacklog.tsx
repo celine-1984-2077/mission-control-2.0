@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import type { Task } from '../../types'
 import type { TaskDetailState } from '../../hooks/useTaskDetail'
 import type { BoardState } from '../../hooks/useBoardState'
@@ -12,6 +13,7 @@ interface TaskDetailBacklogProps {
 export function TaskDetailBacklog({ task, detail, board, onClose }: TaskDetailBacklogProps) {
   const { detailDraft, setDetailDraft, detailImageFiles, setDetailImageFiles,
     detailError, setDetailError, detailImageInputRef } = detail
+  const [confirmDelete, setConfirmDelete] = useState(false)
 
   function handleSave() {
     if (!detailDraft.title.trim()) {
@@ -31,7 +33,6 @@ export function TaskDetailBacklog({ task, detail, board, onClose }: TaskDetailBa
   }
 
   function handleDelete() {
-    if (!confirm(`确认删除任务 ${task.id}？`)) return
     board.deleteTask(task.id)
     onClose()
   }
@@ -144,9 +145,25 @@ export function TaskDetailBacklog({ task, detail, board, onClose }: TaskDetailBa
         </div>
       </div>
 
+      {/* 删除二次确认条 */}
+      {confirmDelete && (
+        <div className="delete-confirm-bar">
+          <span className="delete-confirm-text">⚠ 确认删除任务 {task.id}？此操作不可恢复。</span>
+          <div style={{ display: 'flex', gap: 'var(--space-2)', flexShrink: 0 }}>
+            <button className="btn btn-ghost btn-sm" onClick={() => setConfirmDelete(false)}>取消</button>
+            <button className="btn btn-danger btn-sm" onClick={handleDelete}>确认删除</button>
+          </div>
+        </div>
+      )}
+
       <div className="detail-footer">
         <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
-          <button className="btn btn-danger btn-sm" onClick={handleDelete}>删除</button>
+          <button
+            className="btn btn-danger btn-sm"
+            onClick={() => setConfirmDelete(true)}
+          >
+            删除
+          </button>
         </div>
         <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
           <button className="btn btn-ghost btn-sm" onClick={onClose}>取消</button>

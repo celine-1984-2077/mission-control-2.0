@@ -1281,19 +1281,6 @@
   text-align: center;
 }
 
-/* ── 看板列布局 (board-column-wrap) ──────────────────────── */
-
-.board-column-wrap {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  gap: var(--space-2);
-}
-
-.board-wrap-indicator {
-  flex-shrink: 0;
-}
-
 /* ── 流程指示条 (LaneFlowIndicator) ─────────────────────── */
 
 .lane-flow-indicator {
@@ -1771,6 +1758,27 @@
   object-fit: cover;
 }
 
+/* ── 删除二次确认条 ────────────────────────────────────── */
+
+.delete-confirm-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  background: rgba(255, 105, 105, 0.08);
+  border-top: 1px solid rgba(255, 105, 105, 0.25);
+  border-bottom: 1px solid rgba(255, 105, 105, 0.25);
+  flex-shrink: 0;
+  animation: fadeIn 0.15s ease-out;
+}
+
+.delete-confirm-text {
+  font-size: var(--text-sm);
+  color: var(--color-red-400);
+  font-weight: var(--weight-medium);
+}
+
 /* ── 倒计时标签 ────────────────────────────────────────── */
 
 .countdown-chip {
@@ -1822,6 +1830,47 @@
 .sidebar-search::placeholder {
   color: var(--color-text-muted);
   font-size: var(--text-xs);
+}
+
+/* 侧边栏树区域标题 */
+.sidebar-tree-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-2) var(--space-3) var(--space-1);
+  flex-shrink: 0;
+}
+
+.sidebar-tree-title {
+  font-size: 9px;
+  font-weight: var(--weight-bold);
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.sidebar-tree-add-btn {
+  width: 18px;
+  height: 18px;
+  border-radius: var(--radius-sm);
+  background: none;
+  border: 1px solid var(--color-border-subtle);
+  color: var(--color-text-muted);
+  font-size: 14px;
+  font-weight: var(--weight-bold);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  line-height: 1;
+  padding: 0;
+  transition: background var(--transition-fast), color var(--transition-fast), border-color var(--transition-fast);
+}
+
+.sidebar-tree-add-btn:hover {
+  background: var(--color-blue-100);
+  border-color: var(--color-blue-400);
+  color: var(--color-blue-400);
 }
 
 /* 侧边栏树容器 */
@@ -2029,6 +2078,110 @@
   margin: var(--space-2) var(--space-1);
 }
 
+/* 文件夹行：hover 时显示删除按钮 */
+.file-tree-delete-btn {
+  margin-left: auto;
+  width: 16px;
+  height: 16px;
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--color-text-muted);
+  opacity: 0;
+  transition: opacity var(--transition-fast), background var(--transition-fast), color var(--transition-fast);
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.file-tree-folder-row:hover .file-tree-delete-btn {
+  opacity: 1;
+}
+
+.file-tree-delete-btn:hover {
+  background: rgba(255, 105, 105, 0.15);
+  color: var(--color-red-400);
+}
+
+/* 文件夹行内联删除确认条 */
+.file-tree-delete-confirm {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 4px var(--space-2);
+  background: rgba(255, 105, 105, 0.08);
+  border: 1px solid rgba(255, 105, 105, 0.2);
+  border-radius: var(--radius-md);
+  margin: 2px var(--space-1);
+  animation: fadeIn 0.12s ease-out;
+}
+
+.file-tree-delete-confirm-text {
+  flex: 1;
+  font-size: var(--text-xs);
+  color: var(--color-red-400);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.file-tree-delete-yes {
+  font-size: 10px;
+  font-weight: var(--weight-semibold);
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--color-red-400);
+  color: #fff;
+  border: none;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: opacity var(--transition-fast);
+}
+
+.file-tree-delete-yes:hover { opacity: 0.85; }
+
+.file-tree-delete-no {
+  font-size: 10px;
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--color-text-muted);
+  border: 1px solid var(--color-border-subtle);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background var(--transition-fast);
+}
+
+.file-tree-delete-no:hover { background: var(--color-bg-elevated); }
+
+/* 类型标签芯片（Feat / Fix / QA / Doc…）*/
+.file-tree-kind-chip {
+  font-size: 8px;
+  font-weight: var(--weight-bold);
+  font-family: var(--font-mono);
+  letter-spacing: 0.04em;
+  border: 1px solid currentColor;
+  border-radius: var(--radius-sm);
+  padding: 1px 4px;
+  opacity: 0.7;
+  flex-shrink: 0;
+  line-height: 1.4;
+}
+
+.file-tree-item:hover .file-tree-kind-chip {
+  opacity: 1;
+}
+
+/* 文档 ≡ 图标（青色调）*/
+.file-tree-doc-icon {
+  font-size: 12px;
+  color: var(--color-cyan-400);
+  flex-shrink: 0;
+  opacity: 0.8;
+}
+
 /* 空态文字 */
 .file-tree-empty {
   font-size: var(--text-xs);
@@ -2038,10 +2191,11 @@
   font-style: italic;
 }
 
-/* Slim 模式下隐藏文件树和搜索 */
+/* Slim 模式下隐藏文件树、搜索和树标题 */
 @media (max-width: 1100px) {
   .sidebar-tree-wrap,
-  .sidebar-search-wrap {
+  .sidebar-search-wrap,
+  .sidebar-tree-header {
     display: none;
   }
 }

@@ -14,6 +14,8 @@ interface SidebarProps {
   onSelectTask: (task: Task) => void
   onSelectDoc: (docId: string) => void
   onOpenSettings: () => void
+  onCreateProject: () => void
+  onDeleteProject: (slug: string) => void
 }
 
 export function Sidebar({
@@ -25,6 +27,8 @@ export function Sidebar({
   onSelectTask,
   onSelectDoc,
   onOpenSettings,
+  onCreateProject,
+  onDeleteProject,
 }: SidebarProps) {
   const { t, language, setLanguage } = useI18n()
   const { theme, toggleTheme } = useTheme()
@@ -49,6 +53,19 @@ export function Sidebar({
         />
       </div>
 
+      {/* 文件树区域标题 + 新建项目按钮 */}
+      <div className="sidebar-tree-header sidebar-label">
+        <span className="sidebar-tree-title">项目目录</span>
+        <button
+          className="sidebar-tree-add-btn"
+          onClick={onCreateProject}
+          title="新建项目"
+          aria-label="新建项目"
+        >
+          +
+        </button>
+      </div>
+
       {/* 文件树 */}
       <div className="sidebar-tree-wrap sidebar-label">
         <FileTree
@@ -60,6 +77,7 @@ export function Sidebar({
           onSelectProject={onSelectProject}
           onSelectTask={onSelectTask}
           onSelectDoc={onSelectDoc}
+          onDeleteProject={onDeleteProject}
         />
       </div>
 

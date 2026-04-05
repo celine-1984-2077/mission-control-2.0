@@ -90,7 +90,6 @@ export function BoardView({ board, onTaskClick, onAddTask, selectedProjectSlug }
         <KanbanBoard
           board={board}
           filteredGrouped={filteredGrouped}
-          visibleTasks={visibleTasks}
           onTaskClick={onTaskClick}
           onAddTask={onAddTask}
         />
