@@ -1798,6 +1798,24 @@ function createDocProject(input) {
   return project
 }
 
+function deleteDocProject(slug) {
+  if (!slug) throw new Error('slug is required')
+  const index = readDocStoreIndex()
+  const exists = index.projects.some((p) => p.slug === slug)
+  if (!exists) throw new Error(`Project "${slug}" not found`)
+  // Remove from index
+  index.projects = index.projects.filter((p) => p.slug !== slug)
+  // Remove associated docs from index
+  index.docs = index.docs.filter((d) => d.projectSlug !== slug)
+  writeDocStoreIndex(index)
+  // Remove project directory from disk
+  const projectDir = path.join(DOC_STORE_ROOT, 'projects', slug)
+  if (fs.existsSync(projectDir)) {
+    fs.rmSync(projectDir, { recursive: true, force: true })
+  }
+  return { slug }
+}
+
 function saveAuthoredDoc(input) {
   const projectSlug = String(input?.projectSlug || '').trim()
   const title = String(input?.title || '').trim()
@@ -1959,6 +1977,19 @@ const server = http.createServer((req, res) => {
         res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' })
         res.end(JSON.stringify({ ok: false, error: error instanceof Error ? error.message : 'Failed to create project' }))
       })
+    return
+  }
+
+  if (url.pathname.startsWith('/docs/projects/') && req.method === 'DELETE') {
+    const slug = url.pathname.slice('/docs/projects/'.length)
+    try {
+      const result = deleteDocProject(slug)
+      res.setHeader('Content-Type', 'application/json; charset=utf-8')
+      res.end(JSON.stringify({ ok: true, ...result }))
+    } catch (error) {
+      res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' })
+      res.end(JSON.stringify({ ok: false, error: error instanceof Error ? error.message : 'Failed to delete project' }))
+    }
     return
   }
 
