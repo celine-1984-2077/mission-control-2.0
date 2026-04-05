@@ -1,4 +1,5 @@
 import type { CreateTaskKind, CreateQaPreference, CreateUrlMode } from '../../types'
+import type { DocProject } from '../../types/docs'
 import type { CreateTaskState } from '../../hooks/useCreateTask'
 import type { BoardState } from '../../hooks/useBoardState'
 import { Modal } from '../ui/Modal'
@@ -9,6 +10,7 @@ interface CreateTaskModalProps {
   onClose: () => void
   wizard: CreateTaskState
   board: BoardState
+  docProjectsMeta: DocProject[]
 }
 
 const KINDS: { value: CreateTaskKind; icon: string; label: string; desc: string }[] = [
@@ -31,10 +33,10 @@ const URL_OPTIONS: { value: CreateUrlMode; icon: string; label: string; desc: st
   { value: 'none', icon: '◻', label: '无需 URL', desc: '不涉及前端或浏览器的任务' },
 ]
 
-export function CreateTaskModal({ open, onClose, wizard, board }: CreateTaskModalProps) {
+export function CreateTaskModal({ open, onClose, wizard, board, docProjectsMeta }: CreateTaskModalProps) {
   const {
-    step, goal, kind, qaPreference, urlMode, specificUrl, imageFiles, error, draft,
-    setStep, setGoal, setKind, setQaPreference, setUrlMode, setSpecificUrl,
+    step, goal, projectSlug, kind, qaPreference, urlMode, specificUrl, imageFiles, error, draft,
+    setStep, setGoal, setProjectSlug, setKind, setQaPreference, setUrlMode, setSpecificUrl,
     setImageFiles, setError, reset, imageInputRef, buildTask,
   } = wizard
 
@@ -101,6 +103,21 @@ export function CreateTaskModal({ open, onClose, wizard, board }: CreateTaskModa
               rows={4}
               autoFocus
             />
+            {docProjectsMeta.length > 0 && (
+              <div className="form-group" style={{ marginTop: 'var(--space-3)' }}>
+                <label className="label-eyebrow">归属项目（可选）</label>
+                <select
+                  className="form-select"
+                  value={projectSlug}
+                  onChange={(e) => setProjectSlug(e.target.value)}
+                >
+                  <option value="">无归属项目</option>
+                  {docProjectsMeta.map((p) => (
+                    <option key={p.slug} value={p.slug}>{p.name}</option>
+                  ))}
+                </select>
+              </div>
+            )}
             {error && <div className="wizard-error">{error}</div>}
           </div>
         )}

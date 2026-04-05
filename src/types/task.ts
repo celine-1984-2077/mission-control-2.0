@@ -57,6 +57,7 @@ export type HarnessCapabilities = {
 
 export type Task = {
   id: string
+  projectSlug?: string
   title: string
   objective: string
   targetUrl?: string

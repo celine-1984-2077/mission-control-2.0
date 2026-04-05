@@ -226,7 +226,14 @@
 
 /* ── 侧边栏尺寸 ─────────────────────────────────────────── */
 :root {
-  --sidebar-width:       160px;
+  --sidebar-width:       240px;
   --sidebar-width-slim:  44px;
   --activity-panel-width: 320px;
+}
+
+/* ── 泳道发光色（流程指引节点）─────────────────────────── */
+:root {
+  --color-lane-backlog-glow:  rgba(158, 174, 215, 0.22);
+  --color-lane-triaged-glow:  rgba(85, 116, 255, 0.28);
+  --color-lane-testing-glow:  rgba(69, 226, 139, 0.28);
 }

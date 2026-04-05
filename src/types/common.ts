@@ -2,6 +2,8 @@ export type ColumnKey = 'backlog' | 'triaged' | 'in_progress' | 'testing'
 
 export type NavTab = 'Project' | 'Docs' | 'Settings'
 
+export type AppView = 'board' | 'doc' | 'settings'
+
 export type PlanItemStatus = 'pending' | 'running' | 'done' | 'failed' | 'aborted'
 
 export type CreateTaskKind = 'design' | 'bugfix' | 'feature' | 'docs'

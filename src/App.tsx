@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import type { NavTab } from './types'
+import type { AppView } from './types'
 import { Shell } from './components/layout/Shell'
 import { Sidebar } from './components/layout/Sidebar'
 import { BoardView } from './components/board/BoardView'
@@ -12,9 +12,11 @@ import { useCreateTask } from './hooks/useCreateTask'
 import { useTaskDetail } from './hooks/useTaskDetail'
 import { useDocsState } from './hooks/useDocsState'
 import { useSettingsState } from './hooks/useSettingsState'
+import type { Task } from './types/task'
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<NavTab>('Project')
+  const [appView, setAppView] = useState<AppView>('board')
+  const [selectedProjectSlug, setSelectedProjectSlug] = useState<string | null>(null)
   const [showCreate, setShowCreate] = useState(false)
 
   const board = useBoardState()
@@ -23,34 +25,60 @@ export default function App() {
   const docs = useDocsState()
   const settings = useSettingsState()
 
-  function handleTaskClick(task: Parameters<typeof detail.setSelectedTask>[0]) {
+  function handleTaskClick(task: Task) {
     detail.setSelectedTask(task)
   }
 
   function handleAddTask() {
     wizard.reset()
+    if (selectedProjectSlug) wizard.setProjectSlug(selectedProjectSlug)
     setShowCreate(true)
+  }
+
+  function handleSelectProject(slug: string | null) {
+    setSelectedProjectSlug(slug)
+    setAppView('board')
+  }
+
+  function handleSelectTask(task: Task) {
+    detail.setSelectedTask(task)
+    setAppView('board')
+  }
+
+  function handleSelectDoc(docId: string) {
+    docs.setSelectedDocId(docId)
+    setAppView('doc')
   }
 
   return (
     <Shell
       sidebar={
-        <Sidebar activeNav={activeTab} onNavChange={setActiveTab} />
+        <Sidebar
+          tasks={board.tasks}
+          docs={docs.docs}
+          docProjectsMeta={docs.docProjectsMeta}
+          selectedProjectSlug={selectedProjectSlug}
+          onSelectProject={handleSelectProject}
+          onSelectTask={handleSelectTask}
+          onSelectDoc={handleSelectDoc}
+          onOpenSettings={() => setAppView('settings')}
+        />
       }
     >
-      {activeTab === 'Project' && (
+      {appView !== 'settings' && appView !== 'doc' && (
         <BoardView
           board={board}
           onTaskClick={handleTaskClick}
           onAddTask={handleAddTask}
+          selectedProjectSlug={selectedProjectSlug}
         />
       )}
 
-      {activeTab === 'Docs' && (
+      {appView === 'doc' && (
         <DocsView docs={docs} />
       )}
 
-      {activeTab === 'Settings' && (
+      {appView === 'settings' && (
         <SettingsView settings={settings} />
       )}
 
@@ -59,6 +87,7 @@ export default function App() {
         onClose={() => setShowCreate(false)}
         wizard={wizard}
         board={board}
+        docProjectsMeta={docs.docProjectsMeta}
       />
 
       <TaskDetailModal

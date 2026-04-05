@@ -76,6 +76,12 @@
   to   { opacity: 1; transform: translateX(0); }
 }
 
+/* ── 流程节点脉冲（有任务时节点名称呼吸）─────────────────── */
+@keyframes flowNodePulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.65; }
+}
+
 /* ── 新手引导流程图箭头动画 ───────────────────────────────── */
 @keyframes flowArrowPulse {
   0%, 100% { opacity: 0.4; transform: translateX(0); }

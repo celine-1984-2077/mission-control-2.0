@@ -6,6 +6,7 @@ export interface CreateTaskState {
   // 表单
   step: number
   goal: string
+  projectSlug: string
   kind: CreateTaskKind
   qaPreference: CreateQaPreference
   urlMode: CreateUrlMode
@@ -19,6 +20,7 @@ export interface CreateTaskState {
   // 操作
   setStep: (step: number) => void
   setGoal: (v: string) => void
+  setProjectSlug: (v: string) => void
   setKind: (v: CreateTaskKind) => void
   setQaPreference: (v: CreateQaPreference) => void
   setUrlMode: (v: CreateUrlMode) => void
@@ -45,6 +47,7 @@ function fileToDataUrl(file: File): Promise<string> {
 export function useCreateTask(): CreateTaskState {
   const [step, setStep] = useState(1)
   const [goal, setGoal] = useState('')
+  const [projectSlug, setProjectSlug] = useState('')
   const [kind, setKind] = useState<CreateTaskKind>('feature')
   const [qaPreference, setQaPreference] = useState<CreateQaPreference>('auto')
   const [urlMode, setUrlMode] = useState<CreateUrlMode>('infer')
@@ -60,6 +63,7 @@ export function useCreateTask(): CreateTaskState {
   function reset() {
     setStep(1)
     setGoal('')
+    setProjectSlug('')
     setKind('feature')
     setQaPreference('auto')
     setUrlMode('infer')
@@ -79,6 +83,7 @@ export function useCreateTask(): CreateTaskState {
     }, 0)
     const base: Task = {
       id: `MC-${maxNum + 1}`,
+      projectSlug: projectSlug || undefined,
       title: draft.title || goal.trim(),
       objective: draft.objective || goal.trim(),
       targetUrl: draft.targetUrl,
@@ -94,8 +99,8 @@ export function useCreateTask(): CreateTaskState {
   }
 
   return {
-    step, goal, kind, qaPreference, urlMode, specificUrl, imageFiles, error, draft,
-    setStep, setGoal, setKind, setQaPreference, setUrlMode, setSpecificUrl,
+    step, goal, projectSlug, kind, qaPreference, urlMode, specificUrl, imageFiles, error, draft,
+    setStep, setGoal, setProjectSlug, setKind, setQaPreference, setUrlMode, setSpecificUrl,
     setImageFiles, setError, reset, imageInputRef, buildTask,
   }
 }

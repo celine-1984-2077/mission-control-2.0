@@ -1,21 +1,34 @@
+import { useState } from 'react'
 import { useI18n } from '../../contexts/I18nContext'
 import { useTheme } from '../../contexts/ThemeContext'
-import type { NavTab } from '../../types'
+import { FileTree } from './FileTree'
+import type { Task } from '../../types/task'
+import type { ProjectDoc, DocProject } from '../../types/docs'
 
 interface SidebarProps {
-  activeNav: NavTab
-  onNavChange: (tab: NavTab) => void
+  tasks: Task[]
+  docs: ProjectDoc[]
+  docProjectsMeta: DocProject[]
+  selectedProjectSlug: string | null
+  onSelectProject: (slug: string | null) => void
+  onSelectTask: (task: Task) => void
+  onSelectDoc: (docId: string) => void
+  onOpenSettings: () => void
 }
 
-const NAV_ITEMS: Array<{ key: NavTab; icon: string; labelKey: 'nav.project' | 'nav.docs' | 'nav.settings' }> = [
-  { key: 'Project', icon: '⬡', labelKey: 'nav.project' },
-  { key: 'Docs',    icon: '≡', labelKey: 'nav.docs' },
-  { key: 'Settings', icon: '⚙', labelKey: 'nav.settings' },
-]
-
-export function Sidebar({ activeNav, onNavChange }: SidebarProps) {
+export function Sidebar({
+  tasks,
+  docs,
+  docProjectsMeta,
+  selectedProjectSlug,
+  onSelectProject,
+  onSelectTask,
+  onSelectDoc,
+  onOpenSettings,
+}: SidebarProps) {
   const { t, language, setLanguage } = useI18n()
   const { theme, toggleTheme } = useTheme()
+  const [searchQuery, setSearchQuery] = useState('')
 
   return (
     <aside className="mc-sidebar">
@@ -25,24 +38,44 @@ export function Sidebar({ activeNav, onNavChange }: SidebarProps) {
         <div className="sidebar-brand-sub sidebar-label">CONTROL 2.0</div>
       </div>
 
-      {/* 导航 */}
-      <nav className="sidebar-nav">
-        {NAV_ITEMS.map((item) => (
-          <button
-            key={item.key}
-            className={`sidebar-nav-item ${activeNav === item.key ? 'active' : ''}`.trim()}
-            onClick={() => onNavChange(item.key)}
-            title={t(item.labelKey)}
-          >
-            <span className="sidebar-nav-icon">{item.icon}</span>
-            <span className="sidebar-label">{t(item.labelKey)}</span>
-          </button>
-        ))}
-      </nav>
+      {/* 全局搜索 */}
+      <div className="sidebar-search-wrap sidebar-label">
+        <span className="sidebar-search-icon">🔍</span>
+        <input
+          className="sidebar-search"
+          placeholder={language === 'zh' ? '搜索项目、任务、文档…' : 'Search…'}
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+        />
+      </div>
 
-      {/* 底部控件：主题 + 语言 */}
+      {/* 文件树 */}
+      <div className="sidebar-tree-wrap sidebar-label">
+        <FileTree
+          tasks={tasks}
+          docs={docs}
+          docProjectsMeta={docProjectsMeta}
+          selectedProjectSlug={selectedProjectSlug}
+          searchQuery={searchQuery}
+          onSelectProject={onSelectProject}
+          onSelectTask={onSelectTask}
+          onSelectDoc={onSelectDoc}
+        />
+      </div>
+
+      {/* 底部控件 */}
       <div className="sidebar-footer">
         <div className="sidebar-controls">
+          {/* 设置 */}
+          <button
+            className="icon-btn"
+            onClick={onOpenSettings}
+            title={t('nav.settings')}
+            aria-label="Settings"
+          >
+            ⚙
+          </button>
+
           {/* 主题切换 */}
           <button
             className="icon-btn"
@@ -54,7 +87,7 @@ export function Sidebar({ activeNav, onNavChange }: SidebarProps) {
           </button>
 
           {/* 语言切换 */}
-          <div className="lang-toggle" role="group" aria-label="Language">
+          <div className="lang-toggle sidebar-label" role="group" aria-label="Language">
             <button
               className={`lang-toggle-btn ${language === 'en' ? 'active' : ''}`.trim()}
               onClick={() => setLanguage('en')}
