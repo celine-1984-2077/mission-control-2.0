@@ -1,0 +1,30 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run:*)",
+      "Bash(npx tsc:*)",
+      "Bash(./node_modules/.bin/tsc --noEmit)",
+      "Bash(node_modules/.bin/tsc.cmd --noEmit)",
+      "Bash(ls \"F:\\\\GitHub Clone\\\\mission-control-2.0\\\\node_modules\\\\.bin\"\" | grep tsc 2>&1 || find \"F:/GitHub Clone/mission-control-2.0/node_modules/.bin\" -name \"tsc* \")",
+      "Read(//mnt/**)",
+      "Bash(ls /mnt/)",
+      "Bash(cmd.exe /c \"cd /d \"\"F:\\\\GitHub Clone\\\\mission-control-2.0\"\" && node_modules\\\\.bin\\\\tsc.cmd --noEmit 2>&1\")",
+      "Bash(powershell.exe -Command \"Set-Location ''F:\\\\GitHub Clone\\\\mission-control-2.0''; node_modules\\\\.bin\\\\tsc.cmd --noEmit 2>&1 | Select-Object -First 100\")",
+      "Bash(powershell.exe -Command \"Get-ChildItem ''F:\\\\GitHub Clone\\\\mission-control-2.0\\\\node_modules\\\\.bin'' | Where-Object { $_.Name -like ''tsc*'' }\")",
+      "Bash(powershell.exe -Command \"Test-Path ''F:\\\\GitHub Clone\\\\mission-control-2.0\\\\node_modules''\")",
+      "Bash(powershell.exe -Command \"Set-Location ''F:\\\\GitHub Clone\\\\mission-control-2.0''; npm install 2>&1 | Select-Object -Last 20\")",
+      "Bash(powershell.exe -Command \"Set-Location ''F:\\\\GitHub Clone\\\\mission-control-2.0''; npm run build 2>&1\")",
+      "Bash(powershell.exe -Command \"Set-Location ''F:\\\\GitHub Clone\\\\mission-control-2.0''; Start-Process -NoNewWindow npm -ArgumentList ''run'',''dev'' -PassThru\")",
+      "Bash(powershell.exe -Command \"Select-String -Path ''F:\\\\GitHub Clone\\\\mission-control-2.0\\\\src\\\\styles\\\\*.css'' -Pattern ''form-group|form-input|form-label'' | Select-Object -First 20\")",
+      "Bash(powershell.exe -Command \"Set-Location ''F:\\\\GitHub Clone\\\\mission-control-2.0''; git remote -v; git status --short\")",
+      "Bash(powershell.exe -Command \"Set-Location ''F:\\\\GitHub Clone\\\\mission-control-2.0''; git checkout -b ''neo-ui'' 2>&1\")",
+      "Bash(powershell.exe -Command \"Set-Location ''F:\\\\GitHub Clone\\\\mission-control-2.0''; git add -A; git commit -m ''feat: Mission Control 2.0 Neo UI — complete frontend redesign:*)",
+      "Bash(powershell.exe -Command \"Set-Location ''F:\\\\GitHub Clone\\\\mission-control-2.0''; git push origin neo-ui 2>&1\")",
+      "Bash(powershell.exe -Command \"Set-Location ''F:\\\\GitHub Clone\\\\mission-control-2.0''; git remote -v; git branch -a 2>&1\")",
+      "Bash(powershell.exe -Command \"Select-String -Path ''F:\\\\GitHub Clone\\\\mission-control-2.0\\\\src\\\\types\\\\task.ts'' -Pattern ''clarification|Clarification'' | Select-Object Line\")",
+      "Bash(powershell.exe -Command \"Select-String -Path ''F:\\\\GitHub Clone\\\\mission-control-2.0\\\\src\\\\lib\\\\api.ts'' -Pattern ''clarif'' | Select-Object Line\")",
+      "Bash(powershell.exe -Command \"Select-String -Path ''F:\\\\GitHub Clone\\\\mission-control-2.0\\\\automation\\\\board-bridge-server.mjs'' -Pattern ''clarif'' -SimpleMatch | Select-Object -First 10 | Select-Object Line\")",
+      "Bash(powershell.exe -Command \"Set-Location ''F:\\\\GitHub Clone\\\\mission-control-2.0''; git add -A; git commit -m ''修复等待回答功能:*)"
+    ]
+  }
+}

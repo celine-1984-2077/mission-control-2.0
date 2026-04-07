@@ -1,0 +1,126 @@
+/* ═══════════════════════════════════════════════════════════════
+   MISSION CONTROL 2.0 — TYPOGRAPHY SYSTEM
+   Space Grotesk (标题) + Inter (正文) + JetBrains Mono (代码/ID)
+   ═══════════════════════════════════════════════════════════════ */
+
+:root {
+  /* 字体族 */
+  --font-heading:  'Space Grotesk', 'Segoe UI', ui-sans-serif, sans-serif;
+  --font-body:     'Inter', 'Noto Sans SC', ui-sans-serif, system-ui, sans-serif;
+  --font-mono:     'JetBrains Mono', 'Fira Code', ui-monospace, 'Consolas', monospace;
+
+  /* 字号比例（Major Third 1.250）*/
+  --text-2xs:  10px;
+  --text-xs:   11px;
+  --text-sm:   13px;
+  --text-base: 15px;
+  --text-md:   17px;
+  --text-lg:   20px;
+  --text-xl:   25px;
+  --text-2xl:  31px;
+  --text-3xl:  39px;
+  --text-4xl:  49px;
+  --text-5xl:  61px;
+
+  /* 字重 */
+  --weight-normal:   400;
+  --weight-medium:   500;
+  --weight-semibold: 600;
+  --weight-bold:     700;
+  --weight-extrabold: 800;
+
+  /* 字间距 */
+  --tracking-tight:   -0.025em;
+  --tracking-snug:    -0.012em;
+  --tracking-normal:  0;
+  --tracking-wide:    0.04em;
+  --tracking-wider:   0.08em;
+  --tracking-widest:  0.14em;
+
+  /* 行高 */
+  --leading-none:    1.0;
+  --leading-tight:   1.15;
+  --leading-snug:    1.30;
+  --leading-normal:  1.60;
+  --leading-relaxed: 1.75;
+}
+
+/* ── 基础元素 ──────────────────────────────────────────── */
+
+html {
+  font-family: var(--font-body);
+  font-size: var(--text-base);
+  font-weight: var(--weight-normal);
+  line-height: var(--leading-normal);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+h1, h2, h3 {
+  font-family: var(--font-heading);
+  font-weight: var(--weight-bold);
+  letter-spacing: var(--tracking-tight);
+  line-height: var(--leading-tight);
+}
+
+h4, h5, h6 {
+  font-family: var(--font-body);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-snug);
+}
+
+code, pre, kbd, samp {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+}
+
+/* ── 排版工具类 ──────────────────────────────────────────── */
+
+.font-heading  { font-family: var(--font-heading); }
+.font-body     { font-family: var(--font-body); }
+.font-mono     { font-family: var(--font-mono); }
+
+/* 层级标签（眉标/分类）*/
+.label-eyebrow {
+  font-family: var(--font-body);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-bold);
+  letter-spacing: var(--tracking-widest);
+  text-transform: uppercase;
+  color: var(--color-text-tertiary);
+}
+
+/* 统计数值 */
+.stat-value {
+  font-family: var(--font-heading);
+  font-size: var(--text-3xl);
+  font-weight: var(--weight-extrabold);
+  letter-spacing: var(--tracking-tight);
+  line-height: var(--leading-none);
+}
+
+/* 任务 ID */
+.task-id {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  letter-spacing: var(--tracking-wide);
+  color: var(--color-text-tertiary);
+}
+
+/* Session 消息 */
+.session-message {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: var(--leading-relaxed);
+}
+
+/* 泳道标题 */
+.lane-title {
+  font-family: var(--font-heading);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-bold);
+  letter-spacing: var(--tracking-widest);
+  text-transform: uppercase;
+}

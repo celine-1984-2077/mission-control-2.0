@@ -1,0 +1,239 @@
+/* ═══════════════════════════════════════════════════════════════
+   MISSION CONTROL 2.0 — DESIGN TOKENS
+   暗色主题（默认）：银翼杀手2049风格
+   亮色主题：data-theme="light" 覆盖
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── 暗色主题（默认）────────────────────────────────────────── */
+:root,
+[data-theme="dark"] {
+
+  /* 画布层级 */
+  --color-bg-void:         #03060f;
+  --color-bg-base:         #060b16;
+  --color-bg-surface:      #091125;
+  --color-bg-elevated:     #0d1a38;
+  --color-bg-overlay:      #071026;
+  --color-bg-modal:        #091125;
+  --color-bg-input:        #0b1530;
+
+  /* 边框 */
+  --color-border-subtle:   rgba(92, 116, 186, 0.15);
+  --color-border-default:  rgba(92, 116, 186, 0.28);
+  --color-border-strong:   rgba(92, 116, 186, 0.52);
+  --color-border-focus:    rgba(85, 116, 255, 0.80);
+
+  /* 文字 */
+  --color-text-primary:    #edf2ff;
+  --color-text-secondary:  #9eaed7;
+  --color-text-tertiary:   #5c6e9a;
+  --color-text-inverse:    #060b16;
+  --color-text-code:       #a8d8ea;
+  --color-text-muted:      #3d4f70;
+
+  /* 蓝色系（交互/主CTA）*/
+  --color-blue-100:        rgba(85, 116, 255, 0.10);
+  --color-blue-200:        rgba(85, 116, 255, 0.22);
+  --color-blue-400:        #5776ff;
+  --color-blue-500:        #5574ff;
+  --color-blue-600:        #6685ff;
+  --color-blue-glow:       rgba(85, 116, 255, 0.38);
+
+  /* 琥珀色系（运行/活跃状态 — 银翼杀手标志）*/
+  --color-amber-100:       rgba(240, 150, 58, 0.10);
+  --color-amber-200:       rgba(240, 150, 58, 0.22);
+  --color-amber-400:       #ffaa36;
+  --color-amber-500:       #f0963a;
+  --color-amber-600:       #d97e28;
+  --color-amber-glow:      rgba(240, 150, 58, 0.42);
+
+  /* 青色系（session日志/工具调用）*/
+  --color-cyan-100:        rgba(0, 212, 220, 0.08);
+  --color-cyan-400:        #00d4dc;
+  --color-cyan-500:        #00bfc8;
+  --color-cyan-glow:       rgba(0, 212, 220, 0.28);
+
+  /* 绿色系（完成/成功）*/
+  --color-green-100:       rgba(69, 226, 139, 0.10);
+  --color-green-400:       #45e28b;
+  --color-green-500:       #3cba8e;
+  --color-green-glow:      rgba(69, 226, 139, 0.32);
+
+  /* 红色系（失败/危险）*/
+  --color-red-100:         rgba(255, 105, 105, 0.10);
+  --color-red-400:         #ff6969;
+  --color-red-500:         #e05555;
+  --color-red-glow:        rgba(255, 105, 105, 0.32);
+
+  /* 紫色系（统计/审查）*/
+  --color-violet-400:      #bc80ff;
+  --color-violet-glow:     rgba(188, 128, 255, 0.32);
+
+  /* 状态语义别名 */
+  --color-status-idle:     var(--color-text-tertiary);
+  --color-status-pending:  var(--color-text-secondary);
+  --color-status-running:  var(--color-amber-500);
+  --color-status-done:     var(--color-green-400);
+  --color-status-failed:   var(--color-red-400);
+  --color-status-aborted:  var(--color-amber-400);
+  --color-status-passed:   var(--color-green-400);
+  --color-status-skipped:  var(--color-text-tertiary);
+
+  /* 泳道色彩 */
+  --color-lane-backlog:    var(--color-text-secondary);
+  --color-lane-triaged:    var(--color-blue-500);
+  --color-lane-progress:   var(--color-amber-500);
+  --color-lane-testing:    var(--color-green-400);
+
+  /* 阴影 */
+  --shadow-sm:             0 1px 3px rgba(0, 0, 0, 0.30);
+  --shadow-card:           0 2px 10px rgba(0, 0, 0, 0.40);
+  --shadow-card-hover:     0 6px 24px rgba(0, 0, 0, 0.55);
+  --shadow-modal:          0 28px 80px rgba(0, 0, 0, 0.75);
+  --shadow-glow-blue:      0 0 24px var(--color-blue-glow);
+  --shadow-glow-amber:     0 0 20px var(--color-amber-glow);
+  --shadow-glow-green:     0 0 16px var(--color-green-glow);
+  --shadow-glow-red:       0 0 16px var(--color-red-glow);
+  --shadow-glow-cyan:      0 0 16px var(--color-cyan-glow);
+
+  /* CRT 扫描线（可观测性面板）*/
+  --scanline-opacity:      0.035;
+  --scanline-size:         3px;
+  --scanline: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent calc(var(--scanline-size) - 1px),
+    rgba(0, 0, 0, var(--scanline-opacity)) var(--scanline-size)
+  );
+}
+
+/* ── 亮色主题 ────────────────────────────────────────────── */
+[data-theme="light"] {
+  --color-bg-void:         #dde2ee;
+  --color-bg-base:         #e8ecf5;
+  --color-bg-surface:      #f4f6fb;
+  --color-bg-elevated:     #ffffff;
+  --color-bg-overlay:      #edf0f8;
+  --color-bg-modal:        #ffffff;
+  --color-bg-input:        #f8f9fe;
+
+  --color-border-subtle:   rgba(92, 116, 186, 0.14);
+  --color-border-default:  rgba(92, 116, 186, 0.26);
+  --color-border-strong:   rgba(85, 116, 255, 0.50);
+  --color-border-focus:    rgba(85, 116, 255, 0.75);
+
+  --color-text-primary:    #0d1630;
+  --color-text-secondary:  #3d4f7c;
+  --color-text-tertiary:   #6b7faa;
+  --color-text-inverse:    #ffffff;
+  --color-text-code:       #1a5c7a;
+  --color-text-muted:      #9aabce;
+
+  --color-blue-100:        rgba(61, 92, 232, 0.08);
+  --color-blue-200:        rgba(61, 92, 232, 0.16);
+  --color-blue-400:        #3d5ce8;
+  --color-blue-500:        #3d5ce8;
+  --color-blue-600:        #4f6ef5;
+  --color-blue-glow:       rgba(61, 92, 232, 0.18);
+
+  --color-amber-100:       rgba(180, 100, 10, 0.08);
+  --color-amber-200:       rgba(180, 100, 10, 0.16);
+  --color-amber-400:       #c47a14;
+  --color-amber-500:       #b46808;
+  --color-amber-600:       #9c5a00;
+  --color-amber-glow:      rgba(180, 104, 8, 0.18);
+
+  --color-cyan-100:        rgba(0, 140, 150, 0.08);
+  --color-cyan-400:        #007c85;
+  --color-cyan-500:        #006870;
+  --color-cyan-glow:       rgba(0, 124, 133, 0.16);
+
+  --color-green-100:       rgba(26, 143, 92, 0.08);
+  --color-green-400:       #1a8f5c;
+  --color-green-500:       #157a4e;
+  --color-green-glow:      rgba(26, 143, 92, 0.16);
+
+  --color-red-100:         rgba(196, 48, 48, 0.08);
+  --color-red-400:         #c43030;
+  --color-red-500:         #a82828;
+  --color-red-glow:        rgba(196, 48, 48, 0.16);
+
+  --color-violet-400:      #7c3dbf;
+  --color-violet-glow:     rgba(124, 61, 191, 0.16);
+
+  --shadow-sm:             0 1px 3px rgba(0, 0, 0, 0.08);
+  --shadow-card:           0 1px 5px rgba(0, 0, 0, 0.10);
+  --shadow-card-hover:     0 4px 18px rgba(0, 0, 0, 0.14);
+  --shadow-modal:          0 20px 60px rgba(0, 0, 0, 0.18);
+  --shadow-glow-blue:      0 0 16px var(--color-blue-glow);
+  --shadow-glow-amber:     0 0 14px var(--color-amber-glow);
+  --shadow-glow-green:     0 0 12px var(--color-green-glow);
+  --shadow-glow-red:       0 0 12px var(--color-red-glow);
+  --shadow-glow-cyan:      0 0 12px var(--color-cyan-glow);
+
+  --scanline-opacity:      0;
+  --scanline: none;
+}
+
+/* ── 间距比例 ────────────────────────────────────────────── */
+:root {
+  --space-1:   4px;
+  --space-2:   8px;
+  --space-3:   12px;
+  --space-4:   16px;
+  --space-5:   20px;
+  --space-6:   24px;
+  --space-7:   28px;
+  --space-8:   32px;
+  --space-10:  40px;
+  --space-12:  48px;
+  --space-16:  64px;
+  --space-20:  80px;
+}
+
+/* ── 圆角 ──────────────────────────────────────────────── */
+:root {
+  --radius-xs:   4px;
+  --radius-sm:   6px;
+  --radius-md:   10px;
+  --radius-lg:   14px;
+  --radius-xl:   18px;
+  --radius-2xl:  24px;
+  --radius-full: 9999px;
+}
+
+/* ── 层级 ──────────────────────────────────────────────── */
+:root {
+  --z-board:       1;
+  --z-dropdown:    10;
+  --z-tooltip:     50;
+  --z-modal:       100;
+  --z-lightbox:    120;
+  --z-toast:       200;
+}
+
+/* ── 过渡 ──────────────────────────────────────────────── */
+:root {
+  --transition-fast:    0.12s ease;
+  --transition-default: 0.20s ease;
+  --transition-slow:    0.35s ease;
+  --transition-theme:
+    background-color 0.28s ease,
+    border-color 0.28s ease,
+    color 0.20s ease,
+    box-shadow 0.28s ease;
+}
+
+/* ── 侧边栏尺寸 ─────────────────────────────────────────── */
+:root {
+  --sidebar-width:       240px;
+  --sidebar-width-slim:  44px;
+  --activity-panel-width: 320px;
+}
+
+/* ── 泳道发光色（流程指引节点）─────────────────────────── */
+:root {
+  --color-lane-backlog-glow:  rgba(158, 174, 215, 0.22);
+  --color-lane-triaged-glow:  rgba(85, 116, 255, 0.28);
+  --color-lane-testing-glow:  rgba(69, 226, 139, 0.28);
+}
